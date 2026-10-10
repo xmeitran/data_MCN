@@ -98,6 +98,65 @@ export function isPartner(c: Pick<Connection, "user_type" | "granted_scopes">) {
 
 type Ctx = { id?: string; cipher?: string };
 
+type MetricPoint = {
+  metric_key: string;
+  metric_value: number;
+  dimensions: Record<string, string>;
+};
+
+/** Tách mọi số đo trong response nhưng bỏ qua id/thời gian/mã kỹ thuật. */
+function extractMetricPoints(value: unknown, path = "data", dimensions: Record<string, string> = {}): MetricPoint[] {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return [{ metric_key: path, metric_value: value, dimensions }];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => extractMetricPoints(item, `${path}[${index}]`, dimensions));
+  }
+  if (!value || typeof value !== "object") return [];
+
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => {
+    const lower = key.toLowerCase();
+    if (
+      lower === "id" || lower.endsWith("_id") || lower.includes("timestamp") ||
+      lower.includes("unix") || lower.endsWith("_at") || lower.endsWith("_time") ||
+      lower === "code" || lower === "page_size"
+    ) {
+      return [];
+    }
+    const nextPath = path === "data" ? key : `${path}.${key}`;
+    if (typeof child === "string" && (key === "name" || key === "title" || key === "type")) {
+      return extractMetricPoints({}, nextPath, { ...dimensions, [key]: child });
+    }
+    return extractMetricPoints(child, nextPath, dimensions);
+  });
+}
+
+async function persistMetricPoints(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  ep: EndpointDef,
+  rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
+) {
+  const points = rows.flatMap((row) =>
+    extractMetricPoints(row.payload).map((point) => ({
+      connection_id: connectionId,
+      endpoint_key: ep.key,
+      record_key: row.record_key,
+      metric_key: point.metric_key,
+      metric_value: point.metric_value,
+      dimensions: point.dimensions,
+      snapshot_date: row.snapshot_date,
+      synced_at: new Date().toISOString(),
+    })),
+  );
+  if (!points.length) return;
+  const { error } = await supabase.from("tts_metric_points").upsert(points, {
+    onConflict: "connection_id,endpoint_key,record_key,metric_key",
+  });
+  // Cho phép deploy code trước migration; raw records vẫn phải sync bình thường.
+  if (error && error.code !== "42P01") throw error;
+}
+
 /** Chỉ asset Affiliate Partner mới dùng được cho campaign APIs.
  * Các category asset khác vẫn được lưu để không mất dữ liệu authorization,
  * nhưng TikTok sẽ trả 16032012 nếu dùng chúng làm category_asset_cipher.
@@ -159,6 +218,7 @@ async function syncEndpoint(
         .upsert(rows.slice(i, i + 500), { onConflict: "connection_id,endpoint_key,record_key" });
       if (error) throw error;
     }
+    await persistMetricPoints(supabase, connectionId, ep, rows);
     total += rows.length;
 
     pageToken = data?.next_page_token || undefined;

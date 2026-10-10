@@ -37,6 +37,24 @@ create index if not exists tts_raw_records_endpoint_idx
 create index if not exists tts_raw_records_payload_idx
   on public.tts_raw_records using gin (payload);
 
+-- 2b. Metric chuẩn hóa để dashboard lọc/aggregate mà không phải biết trước
+-- toàn bộ field metric của TikTok. JSON raw vẫn là nguồn sự thật đầy đủ.
+create table if not exists public.tts_metric_points (
+  connection_id uuid not null references public.tts_connections(id) on delete cascade,
+  endpoint_key text not null,
+  record_key text not null,
+  metric_key text not null,
+  metric_value double precision not null,
+  dimensions jsonb not null default '{}'::jsonb,
+  snapshot_date date,
+  synced_at timestamptz not null default now(),
+  primary key (connection_id, endpoint_key, record_key, metric_key)
+);
+create index if not exists tts_metric_points_lookup_idx
+  on public.tts_metric_points (endpoint_key, metric_key, snapshot_date);
+create index if not exists tts_metric_points_connection_idx
+  on public.tts_metric_points (connection_id, snapshot_date);
+
 -- 3. Nhật ký mỗi lần đồng bộ
 create table if not exists public.tts_sync_runs (
   id bigserial primary key,
@@ -51,6 +69,7 @@ create table if not exists public.tts_sync_runs (
 --    Chỉ server (secret key) đọc/ghi được -> token không lộ ra trình duyệt.
 alter table public.tts_connections  enable row level security;
 alter table public.tts_raw_records  enable row level security;
+alter table public.tts_metric_points enable row level security;
 alter table public.tts_sync_runs    enable row level security;
 
 -- 5. View tiện dùng cho CRM (security_invoker để view tôn trọng RLS)

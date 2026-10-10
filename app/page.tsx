@@ -3,116 +3,56 @@ import { ENDPOINTS, PARTNER_ENDPOINTS } from "@/lib/tiktok/endpoints";
 
 export const dynamic = "force-dynamic";
 
-function Env({ name }: { name: string }) {
-  const ok = Boolean(process.env[name]);
-  return (
-    <li>
-      {ok ? "✅" : "❌"} <code>{name}</code>
-    </li>
-  );
-}
+const endpointNames: Record<string, string> = {
+  partner_category_assets: "Partner category assets", partner_campaigns: "Partner campaigns",
+  partner_campaign_products: "Campaign products", partner_campaign_performance: "Campaign performance",
+  affiliate_orders: "Affiliate orders", creator_profile: "Creator profile", showcase_products: "Showcase products",
+  live_core_stats: "LIVE core stats", live_gmv_trend: "LIVE GMV trend", live_view_trend: "LIVE view trend",
+  live_interactive_trend: "LIVE interaction trend", live_traffic: "LIVE traffic", live_product_stats: "LIVE product stats",
+  live_user_portraits: "LIVE user portraits",
+};
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ key?: string }>;
-}) {
-  // Trang này hiện tên creator và lỗi đồng bộ -> khóa bằng ?key=DASHBOARD_KEY
-  const { key } = await searchParams;
+function Env({ name }: { name: string }) { return <span className={`env ${process.env[name] ? "ok" : "missing"}`}>{process.env[name] ? "●" : "○"} {name}</span>; }
+function fmt(value: number) { return new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 }).format(value); }
+function fmtDate(value: string | null | undefined) { return value ? new Date(value).toLocaleString("vi-VN") : "—"; }
+
+export default async function Home({ searchParams }: { searchParams: Promise<{ key?: string; endpoint?: string; q?: string; date?: string }> }) {
+  const params = await searchParams;
   const expected = process.env.DASHBOARD_KEY || process.env.CRON_SECRET;
-  if (!expected || key !== expected) {
-    return (
-      <main style={{ maxWidth: 480, margin: "80px auto", padding: 16, textAlign: "center" }}>
-        <h1 style={{ fontSize: 20 }}>TikTok Shop Sync</h1>
-        <p>Dịch vụ đang chạy.</p>
-      </main>
-    );
-  }
+  if (!expected || params.key !== expected) return <main className="locked"><h1>TikTok Shop Sync</h1><p>Dịch vụ đang chạy.</p></main>;
 
-  let conns: any[] = [];
-  let runs: any[] = [];
-  let dbError: string | null = null;
-  try {
-    const supabase = createAdminClient();
-    const c = await supabase
-      .from("tts_connections")
-      .select("open_id, display_name, user_type, granted_scopes, status, last_synced_at, last_error, access_token_expires_at")
-      .order("created_at", { ascending: false });
-    if (c.error) throw c.error;
-    conns = c.data ?? [];
-    const r = await supabase
-      .from("tts_sync_runs")
-      .select("id, started_at, finished_at, status, stats, errors")
-      .order("id", { ascending: false })
-      .limit(10);
-    if (r.error) throw r.error;
-    runs = r.data ?? [];
-  } catch (e: any) {
-    dbError = e?.message ?? String(e);
-  }
+  const supabase = createAdminClient();
+  const [connectionsResult, runsResult, rawResult, metricsResult] = await Promise.all([
+    supabase.from("tts_connections").select("id, open_id, display_name, user_type, granted_scopes, status, last_synced_at, last_error").order("created_at", { ascending: false }),
+    supabase.from("tts_sync_runs").select("id, started_at, finished_at, status, stats, errors").order("id", { ascending: false }).limit(8),
+    supabase.from("tts_raw_records").select("connection_id, endpoint_key, record_key, payload, snapshot_date, synced_at").order("synced_at", { ascending: false }).limit(1000),
+    supabase.from("tts_metric_points").select("connection_id, endpoint_key, record_key, metric_key, metric_value, dimensions, snapshot_date, synced_at").order("synced_at", { ascending: false }).limit(5000),
+  ]);
+  const conns = connectionsResult.data ?? [], runs = runsResult.data ?? [], raw = rawResult.data ?? [], metrics = metricsResult.data ?? [];
+  const byConnection = new Map(conns.map((c) => [c.id, c.display_name || c.open_id]));
+  const q = (params.q ?? "").toLowerCase();
+  const filteredMetrics = metrics.filter((m) => {
+    if (params.endpoint && m.endpoint_key !== params.endpoint) return false;
+    if (params.date && m.snapshot_date !== params.date) return false;
+    return !q || `${byConnection.get(m.connection_id) ?? ""} ${m.endpoint_key} ${m.metric_key}`.toLowerCase().includes(q);
+  });
+  const summaries = new Map<string, { count: number; total: number }>();
+  for (const m of filteredMetrics) { const key = `${m.endpoint_key}|${m.metric_key}`; const item = summaries.get(key) ?? { count: 0, total: 0 }; item.count++; item.total += Number(m.metric_value) || 0; summaries.set(key, item); }
+  const summaryRows = [...summaries.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 80);
+  const liveRows = filteredMetrics.filter((m) => m.endpoint_key.startsWith("live_")).slice(0, 120);
+  const active = conns.filter((c) => c.status === "active").length;
+  const partnerCount = conns.filter((c) => c.user_type === 3 || (c.granted_scopes ?? []).some((s: string) => s.startsWith("partner."))).length;
 
-  const cell = { padding: "6px 10px", borderBottom: "1px solid #e5e5e5", textAlign: "left" as const, verticalAlign: "top" as const };
-
-  return (
-    <main style={{ maxWidth: 1000, margin: "0 auto", padding: 16 }}>
-      <h1>TikTok Shop → Supabase</h1>
-
-      <h2>1. Cấu hình</h2>
-      <ul>
-        <Env name="NEXT_PUBLIC_SUPABASE_URL" />
-        <Env name="SUPABASE_SECRET_KEY" />
-        <Env name="TTS_APP_KEY" />
-        <Env name="TTS_APP_SECRET" />
-        <Env name="CRON_SECRET" />
-      </ul>
-      {dbError && (
-        <p style={{ color: "#b00020" }}>
-          Supabase lỗi: {dbError}. Kiểm tra key và đã chạy file SQL trong <code>supabase/migrations</code> chưa.
-        </p>
-      )}
-
-      <h2>2. API đang đồng bộ</h2>
-      <ul>
-        {[...ENDPOINTS, ...PARTNER_ENDPOINTS].map((e) => (
-          <li key={e.key}>
-            {e.enabled ? "🟢" : "⚪"} {e.userType === 3 ? "[Partner] " : "[Creator] "}<b>{e.key}</b> — <code>{e.scope}</code> {e.enabled ? "" : "(chưa điền path)"}
-          </li>
-        ))}
-      </ul>
-
-      <h2>3. Tài khoản đã kết nối ({conns.length})</h2>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 14 }}>
-          <thead>
-            <tr>
-              <th style={cell}>Tên</th><th style={cell}>Loại</th><th style={cell}>Trạng thái</th>
-              <th style={cell}>Đồng bộ gần nhất</th><th style={cell}>Lỗi</th>
-            </tr>
-          </thead>
-          <tbody>
-            {conns.map((c) => (
-              <tr key={c.open_id}>
-                <td style={cell}>{c.display_name ?? c.open_id}</td>
-                <td style={cell}>{c.user_type === 3 || (c.granted_scopes ?? []).some((x: string) => x.startsWith("partner.")) ? "Partner" : c.user_type === 1 ? "Creator" : c.user_type === 0 ? "Seller" : "?"}</td>
-                <td style={cell}>{c.status}</td>
-                <td style={cell}>{c.last_synced_at ? new Date(c.last_synced_at).toLocaleString("vi-VN") : "—"}</td>
-                <td style={{ ...cell, whiteSpace: "pre-wrap", fontSize: 12 }}>{c.last_error ?? ""}</td>
-              </tr>
-            ))}
-            {conns.length === 0 && (
-              <tr><td style={cell} colSpan={5}>Chưa có. Gửi link authorize (chọn Creator) cho creator.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <h2>4. Lịch sử đồng bộ</h2>
-      <p>
-        Chạy thử: <code>curl -H &quot;Authorization: Bearer $CRON_SECRET&quot; https://data-mcn.onrender.com/api/cron/tiktok-sync</code>
-      </p>
-      <pre style={{ background: "#f5f5f5", padding: 12, overflowX: "auto", fontSize: 12 }}>
-        {runs.length ? JSON.stringify(runs, null, 2) : "Chưa có lần chạy nào."}
-      </pre>
-    </main>
-  );
+  return <main className="shell"><style>{css}</style>
+    <header className="hero"><div><p className="eyebrow">MCN DATA PLATFORM</p><h1>TikTok Partner <span>Intelligence</span></h1><p className="muted">Raw API responses, metrics và hiệu suất LIVE được gom về một nơi.</p></div><div className="status-pill"><i /> Production · data-mcn.onrender.com</div></header>
+    <section className="toolbar"><form method="get"><input type="hidden" name="key" value={params.key} /><input name="q" defaultValue={params.q} placeholder="Tìm creator, endpoint, metric..." /><select name="endpoint" defaultValue={params.endpoint ?? ""}><option value="">Tất cả endpoint</option>{[...ENDPOINTS, ...PARTNER_ENDPOINTS].map((e) => <option key={e.key} value={e.key}>{endpointNames[e.key] ?? e.key}</option>)}</select><input type="date" name="date" defaultValue={params.date} /><button type="submit">Lọc dữ liệu</button><a href={`/?key=${encodeURIComponent(params.key ?? "")}`}>Xóa lọc</a></form></section>
+    <section className="cards"><div className="card"><small>CREATORS / PARTNERS</small><strong>{conns.length}</strong><span>{active} active · {partnerCount} partner</span></div><div className="card accent"><small>METRIC POINTS</small><strong>{fmt(filteredMetrics.length)}</strong><span>{metricsResult.error ? "Cần chạy migration metric" : "JSON raw vẫn được giữ nguyên"}</span></div><div className="card"><small>RAW API RECORDS</small><strong>{fmt(raw.length)}</strong><span>Đã đọc tối đa 1.000 bản ghi gần nhất</span></div><div className="card"><small>SYNC RUNS</small><strong>{runs.length}</strong><span>{runs[0]?.status ?? "Chưa có lần chạy"}</span></div></section>
+    {metricsResult.error && <div className="notice">Bảng <code>tts_metric_points</code> chưa có hoặc chưa chạy migration mới. Raw data vẫn an toàn; chạy file SQL migration rồi reload trang để xem metric.</div>}
+    <section className="grid two"><div className="panel"><div className="panel-head"><div><p className="eyebrow">LIVE ANALYTICS</p><h2>Metric LIVE gần nhất</h2></div><span className="count">{liveRows.length}</span></div><div className="table-wrap"><table><thead><tr><th>Creator / Partner</th><th>Endpoint</th><th>Metric</th><th>Giá trị</th><th>Ngày</th></tr></thead><tbody>{liveRows.map((m, i) => <tr key={`${m.connection_id}-${m.endpoint_key}-${m.record_key}-${m.metric_key}-${i}`}><td>{byConnection.get(m.connection_id) ?? m.connection_id.slice(0, 12)}</td><td><b>{endpointNames[m.endpoint_key] ?? m.endpoint_key}</b></td><td><code>{m.metric_key}</code></td><td className="number">{fmt(Number(m.metric_value))}</td><td>{m.snapshot_date ?? "—"}</td></tr>)}{!liveRows.length && <tr><td colSpan={5} className="empty">Chưa có metric LIVE. Creator cần authorize và cron cần chạy thành công.</td></tr>}</tbody></table></div></div>
+      <div className="panel"><div className="panel-head"><div><p className="eyebrow">ENDPOINT COVERAGE</p><h2>Metric theo API</h2></div><span className="count">{summaryRows.length}</span></div><div className="table-wrap"><table><thead><tr><th>Endpoint</th><th>Metric key</th><th>Số điểm</th><th>Tổng</th></tr></thead><tbody>{summaryRows.map(([key, s]) => { const [endpoint, metric] = key.split("|"); return <tr key={key}><td>{endpointNames[endpoint] ?? endpoint}</td><td><code>{metric}</code></td><td>{fmt(s.count)}</td><td className="number">{fmt(s.total)}</td></tr>; })}{!summaryRows.length && <tr><td colSpan={4} className="empty">Không có dữ liệu phù hợp bộ lọc.</td></tr>}</tbody></table></div></div></section>
+    <section className="panel"><div className="panel-head"><div><p className="eyebrow">CONNECTIONS</p><h2>Tài khoản đã kết nối</h2></div><span className="count">{conns.length}</span></div><div className="table-wrap"><table><thead><tr><th>Tên</th><th>Loại</th><th>Trạng thái</th><th>Đồng bộ gần nhất</th><th>Lỗi gần nhất</th></tr></thead><tbody>{conns.map((c) => <tr key={c.open_id}><td><strong>{c.display_name ?? c.open_id}</strong><br /><code>{c.open_id}</code></td><td>{c.user_type === 3 || (c.granted_scopes ?? []).some((x: string) => x.startsWith("partner.")) ? "Partner" : c.user_type === 1 ? "Creator" : c.user_type === 0 ? "Seller" : "?"}</td><td><span className={`tag ${c.status === "active" ? "green" : "red"}`}>{c.status}</span></td><td>{fmtDate(c.last_synced_at)}</td><td className="error">{c.last_error ?? "—"}</td></tr>)}{!conns.length && <tr><td colSpan={5} className="empty">Chưa có tài khoản authorize.</td></tr>}</tbody></table></div></section>
+    <section className="panel compact"><div className="panel-head"><div><p className="eyebrow">SYSTEM</p><h2>API & môi trường</h2></div></div><div className="envs"><Env name="NEXT_PUBLIC_SUPABASE_URL" /><Env name="SUPABASE_SECRET_KEY" /><Env name="TTS_APP_KEY" /><Env name="TTS_APP_SECRET" /><Env name="CRON_SECRET" /></div><p className="muted small">Dữ liệu số hóa lấy từ mọi response API; response JSON nguyên bản vẫn nằm trong <code>tts_raw_records</code>.</p></section>
+  </main>;
 }
+
+const css = `:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0b0e13;color:#e8edf5;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}.shell{max-width:1480px;margin:auto;padding:34px 28px 80px}.hero{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;padding:18px 0 34px;border-bottom:1px solid #222936}.eyebrow{margin:0 0 8px;color:#6fd4c2;font-size:11px;letter-spacing:.16em;font-weight:800}.hero h1{font-size:clamp(30px,5vw,56px);line-height:1;margin:0;letter-spacing:-.05em}.hero h1 span{color:#6fd4c2}.muted{color:#8c97a8;margin:12px 0 0}.small{font-size:12px}.status-pill{font-size:12px;color:#aab4c4;border:1px solid #293241;border-radius:999px;padding:10px 14px;white-space:nowrap}.status-pill i{display:inline-block;width:7px;height:7px;background:#55d49b;border-radius:50%;margin-right:7px}.toolbar{padding:20px 0}.toolbar form{display:flex;gap:10px;flex-wrap:wrap}.toolbar input,.toolbar select,.toolbar button{background:#141a23;border:1px solid #2b3544;border-radius:8px;color:#e8edf5;padding:11px 13px;font:inherit}.toolbar input[name=q]{min-width:280px;flex:1}.toolbar button{background:#6fd4c2;color:#08110f;border:0;font-weight:800;cursor:pointer}.toolbar a{padding:11px 4px;color:#8c97a8;font-size:13px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}.card,.panel{background:#11161e;border:1px solid #242d3a;border-radius:14px}.card{padding:18px}.card small{display:block;color:#8c97a8;font-size:10px;letter-spacing:.13em;font-weight:800}.card strong{display:block;font-size:30px;margin:9px 0 2px}.card span{color:#8c97a8;font-size:12px}.card.accent{border-color:#367c78;background:linear-gradient(135deg,#142923,#11161e)}.notice{background:#261e12;border:1px solid #73562c;border-radius:10px;padding:13px 15px;color:#e7c98d;margin:18px 0;font-size:13px}.grid.two{display:grid;grid-template-columns:1.2fr 1fr;gap:18px;margin-bottom:18px}.panel{overflow:hidden;margin-bottom:18px}.panel.compact{padding:20px}.panel-head{display:flex;align-items:center;justify-content:space-between;padding:20px 20px 13px}.panel h2{margin:0;font-size:18px;letter-spacing:-.02em}.count{color:#6fd4c2;font-variant-numeric:tabular-nums}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:13px;min-width:680px}th,td{text-align:left;padding:12px 16px;border-top:1px solid #222936;vertical-align:top}th{color:#8792a3;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800}td code{color:#b9c5d7;font-size:11px}.number{font-variant-numeric:tabular-nums;text-align:right}.empty{text-align:center;color:#8994a5;padding:30px}.tag{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px}.tag.green{background:#123a2c;color:#70e2af}.tag.red{background:#402329;color:#ff9eaa}.error{max-width:420px;white-space:pre-wrap;color:#d9919b;font-size:11px}.envs{display:flex;gap:9px;flex-wrap:wrap}.env{border:1px solid #303949;border-radius:999px;padding:7px 10px;font-size:11px;color:#8c97a8}.env.ok{color:#73d4a8;border-color:#275943}.env.missing{color:#db8c95}.locked{max-width:480px;margin:120px auto;text-align:center;color:#e8edf5}.locked h1{font-size:24px}.locked p{color:#8c97a8}@media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.grid.two{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.status-pill{white-space:normal}}@media(max-width:560px){.shell{padding:22px 14px 60px}.cards{grid-template-columns:1fr 1fr;gap:9px}.card{padding:13px}.card strong{font-size:23px}.toolbar input[name=q]{min-width:100%}}`;
