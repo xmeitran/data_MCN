@@ -1,0 +1,6 @@
+.env.local
+.git
+.next
+node_modules
+_to_delete
+*.log
