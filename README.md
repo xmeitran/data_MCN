@@ -22,6 +22,13 @@ curl -fsS -H "Authorization: Bearer $CRON_SECRET" https://<domain-crm>/api/cron/
 ```
 Lấy lại ngày cũ: thêm `?date=2026-10-01`.
 
+Sync chạy song song có giới hạn: tối đa 4 connection và 6 LIVE/campaign context
+đồng thời. Có thể giảm hai giá trị này bằng `TTS_SYNC_CONNECTION_CONCURRENCY` và
+`TTS_SYNC_CONTEXT_CONCURRENCY` nếu Partner Center trả lỗi rate limit. Chạy migration
+`supabase/migrations/20261012_sync_lock.sql` để chặn hai cron chạy cùng lúc.
+Migration `supabase/migrations/20261013_sync_checkpoints.sql` lưu trạng thái từng
+endpoint/context theo ngày, giúp chạy lại tiếp phần lỗi thay vì gọi lại phần đã xong.
+
 ## Bật thêm API
 Mở `lib/tiktok/endpoints.ts`. Các mục `enabled: false` cần điền path thật từ
 Partner Center → Development Kits → API Documents rồi đổi thành `true`.

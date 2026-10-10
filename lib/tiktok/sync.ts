@@ -4,9 +4,16 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
-const CONNECTION_CONCURRENCY = 4;
-const CONTEXT_CONCURRENCY = 6;
 const UPSERT_BATCH_SIZE = 500;
+const STALE_RUN_MS = 10 * 60 * 1000;
+
+function concurrencyFromEnv(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+const CONNECTION_CONCURRENCY = concurrencyFromEnv("TTS_SYNC_CONNECTION_CONCURRENCY", 4);
+const CONTEXT_CONCURRENCY = concurrencyFromEnv("TTS_SYNC_CONTEXT_CONCURRENCY", 6);
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -120,6 +127,60 @@ export function isPartner(c: Pick<Connection, "user_type" | "granted_scopes">) {
 }
 
 type Ctx = { id?: string; cipher?: string };
+
+function checkpointKey(ctx: Ctx) {
+  if (ctx.id && ctx.cipher) return `${ctx.id}:${ctx.cipher}`;
+  if (ctx.id) return ctx.id;
+  if (ctx.cipher) return `cipher:${ctx.cipher}`;
+  return "root";
+}
+
+async function checkpointIsComplete(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  endpointKey: string,
+  context: Ctx,
+  snapshotDate: string,
+) {
+  const { data, error } = await supabase
+    .from("tts_sync_checkpoints")
+    .select("status")
+    .eq("connection_id", connectionId)
+    .eq("endpoint_key", endpointKey)
+    .eq("context_key", checkpointKey(context))
+    .eq("snapshot_date", snapshotDate)
+    .maybeSingle();
+  // Allow application code to deploy before the optional checkpoint migration.
+  if (error?.code === "42P01") return false;
+  if (error) throw error;
+  return data?.status === "success";
+}
+
+async function saveCheckpoint(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  endpointKey: string,
+  context: Ctx,
+  snapshotDate: string,
+  status: "success" | "failed",
+  recordCount: number,
+  lastError: string | null = null,
+) {
+  const { error } = await supabase.from("tts_sync_checkpoints").upsert(
+    {
+      connection_id: connectionId,
+      endpoint_key: endpointKey,
+      context_key: checkpointKey(context),
+      snapshot_date: snapshotDate,
+      status,
+      record_count: recordCount,
+      last_error: lastError?.slice(0, 2000) ?? null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "connection_id,endpoint_key,context_key,snapshot_date" },
+  );
+  if (error && error.code !== "42P01") throw error;
+}
 
 type MetricPoint = {
   metric_key: string;
@@ -256,7 +317,50 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
   const supabase = createAdminClient();
   const window = opts.window ?? yesterdayWindowVN();
 
-  const { data: run } = await supabase.from("tts_sync_runs").insert({}).select("id").single();
+  const staleBefore = new Date(Date.now() - STALE_RUN_MS).toISOString();
+  await supabase
+    .from("tts_sync_runs")
+    .update({
+      finished_at: new Date().toISOString(),
+      status: "failed",
+      errors: [{ error: "stale sync run closed before starting a new run" }],
+    })
+    .eq("status", "running")
+    .lt("started_at", staleBefore);
+
+  const { data: activeRun, error: activeRunError } = await supabase
+    .from("tts_sync_runs")
+    .select("id")
+    .eq("status", "running")
+    .limit(1)
+    .maybeSingle();
+  if (activeRunError) throw activeRunError;
+  if (activeRun) {
+    return {
+      window,
+      connections: 0,
+      stats: {},
+      errors: [],
+      skipped: true,
+      reason: "sync_already_running",
+    };
+  }
+
+  const { data: run, error: runError } = await supabase.from("tts_sync_runs").insert({}).select("id").single();
+  if (runError) {
+    // The partial unique index makes this atomic after the lock migration is applied.
+    if (runError.code === "23505") {
+      return {
+        window,
+        connections: 0,
+        stats: {},
+        errors: [],
+        skipped: true,
+        reason: "sync_already_running",
+      };
+    }
+    throw runError;
+  }
 
   const { data: conns, error } = await supabase
     .from("tts_connections")
@@ -312,11 +416,17 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
             .filter((x) => x.id);
         }
         const contextResults = await mapWithConcurrency(ctxs, CONTEXT_CONCURRENCY, async (ctx) => {
+          if (await checkpointIsComplete(supabase, c.id, ep.key, ctx, window.date)) {
+            return { count: 0 };
+          }
           try {
-            return { count: await syncEndpoint(supabase, c.id, token, ep, window, ctx) };
+            const count = await syncEndpoint(supabase, c.id, token, ep, window, ctx);
+            await saveCheckpoint(supabase, c.id, ep.key, ctx, window.date, "success", count);
+            return { count };
           } catch (e: any) {
             const msg = e instanceof TikTokApiError ? e.message : String(e.message ?? e);
             const where = ctx.id ? `${ep.key}:${ctx.id}` : ep.key;
+            await saveCheckpoint(supabase, c.id, ep.key, ctx, window.date, "failed", 0, msg);
             return { count: 0, error: { open_id: c.open_id, endpoint: where, error: msg }, message: `${where}: ${msg}` };
           }
         });
