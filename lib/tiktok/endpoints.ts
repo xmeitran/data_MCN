@@ -77,7 +77,9 @@ export const ENDPOINTS: EndpointDef[] = [
     // Chỉ đơn đi qua link do app tạo (order_id + product_id)
     key: "affiliate_trace_orders",
     scope: "creator.affiliate.share_link.read",
-    enabled: true,
+    // API này yêu cầu danh sách `orders` đầu vào, không phải bộ lọc thời gian.
+    // Tắt khỏi cron tổng quát để không tạo lỗi giả cho mọi creator.
+    enabled: false,
     method: "POST",
     path: "/affiliate_creator/202505/orders/trace/search",
     listField: "orders",
@@ -102,7 +104,7 @@ export const ENDPOINTS: EndpointDef[] = [
     snapshot: false,
     paginated: true,
     buildRequest: ({ pageToken }) => ({
-      query: { page_size: PAGE, page_token: pageToken, origin: "SHOWCASE" },
+      query: { page_size: 20, page_token: pageToken, origin: "SHOWCASE" },
     }),
   },
 
@@ -119,7 +121,17 @@ export const ENDPOINTS: EndpointDef[] = [
     paginated: true,
     buildRequest: ({ pageToken }) => ({
       query: { page_size: PAGE, page_token: pageToken },
-      body: {},
+      body: {
+        application_statuses: [
+          "PENDING",
+          "AWAITING_SHIPMENT",
+          "SHIPPED",
+          "RECEIVED",
+          "COMPLETED",
+          "CANCELED",
+          "FULFILLMENT_SUSPEND",
+        ],
+      },
     }),
   },
   {
