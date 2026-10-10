@@ -190,7 +190,9 @@ export const PARTNER_ENDPOINTS: EndpointDef[] = [
     // Đơn affiliate qua các chiến dịch TAP của partner (kèm creator, hoa hồng)
     key: "partner_tap_orders",
     scope: "partner.tap_campaign.read",
-    enabled: true,
+    // TikTok hiện trả 36009009 Invalid path với market/scope hiện tại.
+    // Bật lại khi Partner Center cấp đúng TAP order API cho app.
+    enabled: false,
     userType: 3,
     forEach: "category_asset",
     method: "POST",

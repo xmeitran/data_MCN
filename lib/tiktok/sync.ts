@@ -98,6 +98,16 @@ export function isPartner(c: Pick<Connection, "user_type" | "granted_scopes">) {
 
 type Ctx = { id?: string; cipher?: string };
 
+/** Chỉ asset Affiliate Partner mới dùng được cho campaign APIs.
+ * Các category asset khác vẫn được lưu để không mất dữ liệu authorization,
+ * nhưng TikTok sẽ trả 16032012 nếu dùng chúng làm category_asset_cipher.
+ */
+function affiliatePartnerAssets(payloads: any[]) {
+  return payloads.filter(
+    (a) => String(a?.category?.name ?? "").toLowerCase() === "seller and scalable creator match-up",
+  );
+}
+
 async function syncEndpoint(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
@@ -207,7 +217,7 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
         if (ep.forEach === "live_room") {
           ctxs = (await liveRoomIds(supabase, c.id, window)).map((id) => ({ id }));
         } else if (ep.forEach === "category_asset") {
-          ctxs = (await storedPayloads(supabase, c.id, "partner_category_assets"))
+          ctxs = affiliatePartnerAssets(await storedPayloads(supabase, c.id, "partner_category_assets"))
             .map((a) => a?.cipher)
             .filter(Boolean)
             .map((cipher) => ({ cipher }));
