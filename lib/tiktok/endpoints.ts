@@ -238,7 +238,15 @@ export const PARTNER_ENDPOINTS: EndpointDef[] = [
     snapshot: false,
     paginated: true,
     buildRequest: ({ pageToken, cipher }) => ({
-      query: { page_size: PAGE, page_token: pageToken, category_asset_cipher: cipher },
+      query: {
+        page_size: PAGE,
+        page_token: pageToken,
+        category_asset_cipher: cipher,
+        // TikTok yêu cầu status cho campaign list dù tài liệu đánh dấu là optional.
+        status: "READY",
+        type: "MY_CAMPAIGNS",
+        query_type_filter: "DEFAULT",
+      },
     }),
   },
   {
