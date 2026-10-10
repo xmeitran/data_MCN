@@ -93,15 +93,25 @@ export async function callApi<T = any>(opts: {
 
   // Retry nhẹ khi bị rate limit / lỗi mạng
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, {
-      method: opts.method,
-      headers: {
-        "content-type": "application/json",
-        "x-tts-access-token": opts.accessToken,
-      },
-      body: bodyStr || undefined,
-      cache: "no-store",
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: opts.method,
+        headers: {
+          "content-type": "application/json",
+          "x-tts-access-token": opts.accessToken,
+        },
+        body: bodyStr || undefined,
+        cache: "no-store",
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        continue;
+      }
+      throw error;
+    }
     if ((res.status === 429 || res.status >= 500) && attempt < 3) {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
