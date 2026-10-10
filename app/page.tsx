@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { ENDPOINTS } from "@/lib/tiktok/endpoints";
+import { ENDPOINTS, PARTNER_ENDPOINTS } from "@/lib/tiktok/endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +36,7 @@ export default async function Home({
     const supabase = createAdminClient();
     const c = await supabase
       .from("tts_connections")
-      .select("open_id, display_name, user_type, status, last_synced_at, last_error, access_token_expires_at")
+      .select("open_id, display_name, user_type, granted_scopes, status, last_synced_at, last_error, access_token_expires_at")
       .order("created_at", { ascending: false });
     if (c.error) throw c.error;
     conns = c.data ?? [];
@@ -73,9 +73,9 @@ export default async function Home({
 
       <h2>2. API đang đồng bộ</h2>
       <ul>
-        {ENDPOINTS.map((e) => (
+        {[...ENDPOINTS, ...PARTNER_ENDPOINTS].map((e) => (
           <li key={e.key}>
-            {e.enabled ? "🟢" : "⚪"} <b>{e.key}</b> — <code>{e.scope}</code> {e.enabled ? "" : "(chưa điền path)"}
+            {e.enabled ? "🟢" : "⚪"} {e.userType === 3 ? "[Partner] " : "[Creator] "}<b>{e.key}</b> — <code>{e.scope}</code> {e.enabled ? "" : "(chưa điền path)"}
           </li>
         ))}
       </ul>
@@ -93,10 +93,10 @@ export default async function Home({
             {conns.map((c) => (
               <tr key={c.open_id}>
                 <td style={cell}>{c.display_name ?? c.open_id}</td>
-                <td style={cell}>{c.user_type === 1 ? "Creator" : c.user_type === 0 ? "Seller" : "?"}</td>
+                <td style={cell}>{c.user_type === 3 || (c.granted_scopes ?? []).some((x: string) => x.startsWith("partner.")) ? "Partner" : c.user_type === 1 ? "Creator" : c.user_type === 0 ? "Seller" : "?"}</td>
                 <td style={cell}>{c.status}</td>
                 <td style={cell}>{c.last_synced_at ? new Date(c.last_synced_at).toLocaleString("vi-VN") : "—"}</td>
-                <td style={cell}>{c.last_error ?? ""}</td>
+                <td style={{ ...cell, whiteSpace: "pre-wrap", fontSize: 12 }}>{c.last_error ?? ""}</td>
               </tr>
             ))}
             {conns.length === 0 && (

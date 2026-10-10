@@ -24,8 +24,15 @@ export type EndpointDef = {
    * Endpoint phụ thuộc: chạy 1 lần cho mỗi ID lấy từ dữ liệu đã đồng bộ
    * trước đó (vd: mỗi phiên LIVE lấy từ đơn affiliate).
    */
-  forEach?: "live_room";
-  buildRequest: (ctx: { pageToken?: string; window: SyncWindow; id?: string }) => {
+  forEach?: "live_room" | "category_asset" | "campaign";
+  /** Loại token dùng được: 1 = creator, 3 = partner (MCN/TAP). Mặc định 1 */
+  userType?: 1 | 3;
+  buildRequest: (ctx: {
+    pageToken?: string;
+    window: SyncWindow;
+    id?: string;
+    cipher?: string;
+  }) => {
     path?: string;
     query?: Record<string, string | number | undefined>;
     body?: unknown;
@@ -118,7 +125,8 @@ export const ENDPOINTS: EndpointDef[] = [
   {
     key: "sample_fulfillments",
     scope: "creator.affiliate_collaboration.read",
-    enabled: true,
+    // TikTok trả 36009003 "Internal error" cho mọi creator -> tạm tắt
+    enabled: false,
     method: "POST",
     path: "/affiliate_creator/202409/sample_applications/fulfillments/search",
     listField: "fulfillments",
@@ -159,6 +167,113 @@ export const ENDPOINTS: EndpointDef[] = [
       }),
     }),
   ),
+];
+
+// ---------- PARTNER / MCN (token partner, user_type = 3) ----------
+// Không cần từng creator authorize: dùng token của chính tài khoản Partner.
+// Mọi API partner cần category_asset_cipher lấy từ /authorization/202405/category_assets.
+export const PARTNER_ENDPOINTS: EndpointDef[] = [
+  {
+    key: "partner_category_assets",
+    scope: "partner.authorization.info",
+    enabled: true,
+    userType: 3,
+    method: "GET",
+    path: "/authorization/202405/category_assets",
+    listField: "category_assets",
+    idOf: (a) => a?.cipher,
+    snapshot: false,
+    paginated: false,
+    buildRequest: () => ({}),
+  },
+  {
+    // Đơn affiliate qua các chiến dịch TAP của partner (kèm creator, hoa hồng)
+    key: "partner_tap_orders",
+    scope: "partner.tap_campaign.read",
+    enabled: true,
+    userType: 3,
+    forEach: "category_asset",
+    method: "POST",
+    path: "/affiliate_partner/202405/tap/orders/search",
+    listField: "orders",
+    idOf: (o) => o?.id ?? o?.order_id,
+    snapshot: false,
+    paginated: true,
+    buildRequest: ({ pageToken, window, cipher }) => ({
+      query: { page_size: PAGE, page_token: pageToken, category_asset_cipher: cipher },
+      body: { create_time_ge: window.startUnix, create_time_lt: window.endUnix },
+    }),
+  },
+  {
+    // Đơn affiliate của toàn bộ creator thuộc MCN (CAP).
+    // App hiện chưa được cấp scope CAP nên không chạy endpoint này.
+    key: "partner_cap_orders",
+    scope: "partner.cap_orders.read",
+    enabled: false,
+    userType: 3,
+    forEach: "category_asset",
+    method: "POST",
+    path: "/affiliate_partner/202405/cap/orders/search",
+    listField: "orders",
+    idOf: (o) => o?.order_id ?? o?.id,
+    snapshot: false,
+    paginated: true,
+    buildRequest: ({ pageToken, window, cipher }) => ({
+      query: { page_size: PAGE, page_token: pageToken, category_asset_cipher: cipher },
+      body: { create_time_ge: window.startUnix, create_time_lt: window.endUnix },
+    }),
+  },
+  {
+    key: "partner_campaigns",
+    scope: "partner.tap_campaign.read",
+    enabled: true,
+    userType: 3,
+    forEach: "category_asset",
+    method: "GET",
+    path: "/affiliate_partner/202405/campaigns",
+    listField: "campaigns",
+    idOf: (c) => c?.id ?? c?.campaign_id,
+    snapshot: false,
+    paginated: true,
+    buildRequest: ({ pageToken, cipher }) => ({
+      query: { page_size: PAGE, page_token: pageToken, category_asset_cipher: cipher },
+    }),
+  },
+  {
+    // Sản phẩm seller đã đăng ký vào từng Partner Campaign
+    key: "partner_campaign_products",
+    scope: "partner.tap_campaign.read",
+    enabled: true,
+    userType: 3,
+    forEach: "campaign",
+    method: "GET",
+    path: "/affiliate_partner/202405/campaigns/{campaign_id}/products",
+    listField: "products",
+    idOf: (p) => p?.id ?? p?.product_id,
+    snapshot: false,
+    paginated: true,
+    buildRequest: ({ pageToken, id, cipher }) => ({
+      path: `/affiliate_partner/202405/campaigns/${encodeURIComponent(id ?? "")}/products`,
+      query: { page_size: PAGE, page_token: pageToken, category_asset_cipher: cipher },
+    }),
+  },
+  {
+    // Hiệu suất creator theo sản phẩm trong từng chiến dịch
+    key: "partner_campaign_performance",
+    scope: "partner.tap_campaign.read",
+    enabled: true,
+    userType: 3,
+    forEach: "campaign",
+    method: "GET",
+    path: "/affiliate_partner/202501/campaigns/{campaign_id}/products/performance",
+    listField: "campaign_product_statistics",
+    snapshot: true,
+    paginated: true,
+    buildRequest: ({ pageToken, id, cipher }) => ({
+      path: `/affiliate_partner/202501/campaigns/${encodeURIComponent(id ?? "")}/products/performance`,
+      query: { page_size: PAGE, page_token: pageToken, category_asset_cipher: cipher },
+    }),
+  },
 ];
 
 /*

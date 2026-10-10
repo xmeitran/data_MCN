@@ -1,5 +1,5 @@
 import { callApi, refreshToken, TikTokApiError } from "./client";
-import { ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
+import { ENDPOINTS, PARTNER_ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
@@ -8,6 +8,8 @@ const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
 type Connection = {
   id: string;
   open_id: string;
+  user_type: number | null;
+  granted_scopes: string[] | null;
   access_token: string;
   access_token_expires_at: string;
   refresh_token: string;
@@ -74,19 +76,42 @@ async function liveRoomIds(
   return [...ids];
 }
 
+/** Đọc lại payload đã đồng bộ của 1 endpoint (dùng làm đầu vào cho endpoint phụ thuộc) */
+async function storedPayloads(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  endpointKey: string,
+): Promise<any[]> {
+  const { data, error } = await supabase
+    .from("tts_raw_records")
+    .select("payload")
+    .eq("connection_id", connectionId)
+    .eq("endpoint_key", endpointKey);
+  if (error) throw error;
+  return (data ?? []).map((r) => r.payload);
+}
+
+/** Token partner (MCN/TAP) = user_type 3, hoặc có scope bắt đầu bằng "partner." */
+export function isPartner(c: Pick<Connection, "user_type" | "granted_scopes">) {
+  return c.user_type === 3 || (c.granted_scopes ?? []).some((s) => s.startsWith("partner."));
+}
+
+type Ctx = { id?: string; cipher?: string };
+
 async function syncEndpoint(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
   accessToken: string,
   ep: EndpointDef,
   window: SyncWindow,
-  id?: string,
+  ctx: Ctx = {},
 ): Promise<number> {
+  const { id, cipher } = ctx;
   let pageToken: string | undefined;
   let total = 0;
 
   for (let page = 0; page < MAX_PAGES; page++) {
-    const req = ep.buildRequest({ pageToken, window, id });
+    const req = ep.buildRequest({ pageToken, window, id, cipher });
     const data: any = await callApi({
       method: ep.method,
       path: req.path ?? ep.path,
@@ -112,7 +137,7 @@ async function syncEndpoint(
         connection_id: connectionId,
         endpoint_key: ep.key,
         record_key: ep.snapshot ? `${baseId}@${window.date}` : baseId,
-        payload: item,
+        payload: cipher && item && typeof item === "object" ? { ...item, _cipher: cipher } : item,
         snapshot_date: window.date,
         synced_at: now,
       };
@@ -142,11 +167,12 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
 
   const { data: conns, error } = await supabase
     .from("tts_connections")
-    .select("id, open_id, access_token, access_token_expires_at, refresh_token, refresh_token_expires_at")
+    .select(
+      "id, open_id, user_type, granted_scopes, access_token, access_token_expires_at, refresh_token, refresh_token_expires_at",
+    )
     .eq("status", "active");
   if (error) throw error;
 
-  const endpoints = ENDPOINTS.filter((e) => e.enabled);
 
   for (const c of (conns ?? []) as Connection[]) {
     let token: string;
@@ -162,35 +188,60 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
       continue;
     }
 
-    let connError: string | null = null;
-    let rooms: string[] | null = null;
+    // Chưa rõ loại tài khoản -> thử gọi API partner; thành công thì đánh dấu là Partner
+    if (c.user_type == null && !isPartner(c)) {
+      try {
+        await callApi({ method: "GET", path: "/authorization/202405/category_assets", accessToken: token });
+        c.user_type = 3;
+      } catch {
+        c.user_type = 1;
+      }
+      await supabase.from("tts_connections").update({ user_type: c.user_type }).eq("id", c.id);
+    }
+
+    const endpoints = (isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS).filter((e) => e.enabled);
+    const connErrors: string[] = [];
     for (const ep of endpoints) {
       try {
-        let ids: (string | undefined)[] = [undefined];
+        let ctxs: Ctx[] = [{}];
         if (ep.forEach === "live_room") {
-          rooms ??= await liveRoomIds(supabase, c.id, window);
-          ids = rooms;
+          ctxs = (await liveRoomIds(supabase, c.id, window)).map((id) => ({ id }));
+        } else if (ep.forEach === "category_asset") {
+          ctxs = (await storedPayloads(supabase, c.id, "partner_category_assets"))
+            .map((a) => a?.cipher)
+            .filter(Boolean)
+            .map((cipher) => ({ cipher }));
+        } else if (ep.forEach === "campaign") {
+          // campaign đã lưu kèm cipher của category asset ở field _cipher
+          ctxs = (await storedPayloads(supabase, c.id, "partner_campaigns"))
+            .map((p) => ({ id: String(p?.id ?? p?.campaign_id ?? ""), cipher: p?._cipher }))
+            .filter((x) => x.id);
         }
-        for (const id of ids) {
+        for (const ctx of ctxs) {
           try {
-            const n = await syncEndpoint(supabase, c.id, token, ep, window, id);
+            const n = await syncEndpoint(supabase, c.id, token, ep, window, ctx);
             stats[ep.key] = (stats[ep.key] ?? 0) + n;
           } catch (e: any) {
             const msg = e instanceof TikTokApiError ? e.message : String(e.message ?? e);
-            errors.push({ open_id: c.open_id, endpoint: id ? `${ep.key}:${id}` : ep.key, error: msg });
-            connError = msg;
+            const where = ctx.id ? `${ep.key}:${ctx.id}` : ep.key;
+            errors.push({ open_id: c.open_id, endpoint: where, error: msg });
+            connErrors.push(`${where}: ${msg}`);
           }
         }
       } catch (e: any) {
         const msg = String(e.message ?? e);
         errors.push({ open_id: c.open_id, endpoint: ep.key, error: msg });
-        connError = msg;
+        connErrors.push(`${ep.key}: ${msg}`);
       }
     }
 
     await supabase
       .from("tts_connections")
-      .update({ last_synced_at: new Date().toISOString(), last_error: connError })
+      .update({
+        last_synced_at: new Date().toISOString(),
+        // Ghi TẤT CẢ lỗi của lần chạy (không chỉ lỗi cuối)
+        last_error: connErrors.length ? connErrors.join("\n").slice(0, 4000) : null,
+      })
       .eq("id", c.id);
   }
 
