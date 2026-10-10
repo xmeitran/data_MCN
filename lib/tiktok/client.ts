@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 const AUTH_BASE = "https://auth.tiktok-shops.com";
 const API_BASE = "https://open-api.tiktokglobalshop.com";
+const REQUEST_TIMEOUT_MS = 15_000;
 
 function appKey() {
   const v = process.env.TTS_APP_KEY;
@@ -34,7 +35,7 @@ export class TikTokApiError extends Error {
 async function authRequest(path: string, params: Record<string, string>): Promise<TokenData> {
   const url = new URL(AUTH_BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   const body = await res.json();
   if (!res.ok || body.code !== 0) {
     throw new TikTokApiError(path, body.code ?? res.status, body.message ?? "auth error");
@@ -91,7 +92,7 @@ export async function callApi<T = any>(opts: {
   const url = new URL(API_BASE + opts.path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
-  // Retry nhẹ khi bị rate limit / lỗi mạng
+  // Retry ngắn để một endpoint lỗi không giữ cron quá lâu.
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     try {
@@ -103,16 +104,18 @@ export async function callApi<T = any>(opts: {
         },
         body: bodyStr || undefined,
         cache: "no-store",
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
-      if (attempt < 3) {
+      // Lỗi mạng/timeout chỉ thử lại một lần; nhiều endpoint chạy nối tiếp
+      // nên retry 3 lần có thể làm cron vượt giới hạn thời gian của Render.
+      if (attempt < 1) {
         await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
         continue;
       }
       throw error;
     }
-    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+    if ((res.status === 429 || res.status >= 500) && attempt < 1) {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
     }
