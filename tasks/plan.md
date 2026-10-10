@@ -17,14 +17,20 @@ Build the first operational release of the MCN system described in `DX — MCN.d
 ### Phase 1: Foundation and shell
 
 - [ ] Task 1: Add plan and acceptance checklist.
-- [ ] Task 2: Replace the raw metric page with an accessible MCN workspace shell and navigation.
-- [ ] Task 3: Add server-side data contracts and aggregate queries for creators, metrics, campaigns, tasks and issues.
+- [x] Task 2: Replace the raw metric page with an accessible MCN workspace shell and navigation.
+- [x] Task 3: Add server-side data contracts and aggregate queries for creators, metrics, campaigns, tasks and issues.
 
 ### Phase 2: Core vertical slices
 
-- [ ] Task 4: Creator CRM directory and Creator profile/performance view.
-- [ ] Task 5: Campaign/deal tracker with booking and matching tables.
-- [ ] Task 6: Report MCN and operational workload/SLA views.
+- [x] Task 4: Creator CRM directory and Creator profile/performance view.
+- [x] Task 5: Campaign/deal tracker with booking and matching tables.
+- [x] Task 6: Report MCN and operational workload/SLA views.
+
+### Reference-led UI pass
+
+- [x] Add a light analytics workspace shell with module groups, setup card, global search and URL-safe navigation.
+- [x] Add date filters, analytics tabs, KPI cards and top-creator reporting tables inspired by the supplied reference screens.
+- [x] Preserve MCN branding, source data and empty/error states instead of copying third-party branding or assets.
 
 ### Checkpoint: Core release
 
@@ -35,7 +41,7 @@ Build the first operational release of the MCN system described in `DX — MCN.d
 
 ### Phase 3: Verification and shipping
 
-- [ ] Task 7: Run build, static checks and manual browser verification.
+- [x] Task 7: Run build, static checks and manual browser verification.
 - [ ] Task 8: Commit and push the implementation; document Supabase/app deployment steps.
 
 ## Risks and mitigations
