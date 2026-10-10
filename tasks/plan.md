@@ -42,7 +42,7 @@ Build the first operational release of the MCN system described in `DX — MCN.d
 ### Phase 3: Verification and shipping
 
 - [x] Task 7: Run build, static checks and manual browser verification.
-- [ ] Task 8: Commit and push the implementation; document Supabase/app deployment steps.
+- [x] Task 8: Commit and push the implementation; document Supabase/app deployment steps.
 
 ## Risks and mitigations
 
