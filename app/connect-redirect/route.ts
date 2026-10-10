@@ -4,6 +4,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
+function publicOrigin(req: NextRequest) {
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  return host ? `${proto}://${host}` : req.nextUrl.origin;
+}
+
 /**
  * Redirect URL đăng ký trong Partner Center trỏ về đây:
  *   https://<domain-crm>/connect-redirect
@@ -36,7 +43,7 @@ export async function GET(req: NextRequest) {
     );
     if (error) throw error;
 
-    const done = new URL("/connect-success", req.nextUrl.origin);
+    const done = new URL("/connect-success", publicOrigin(req));
     done.searchParams.set("name", t.seller_name ?? "");
     return NextResponse.redirect(done);
   } catch (e: any) {

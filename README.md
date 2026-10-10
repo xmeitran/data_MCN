@@ -7,6 +7,7 @@ Chép các thư mục `app/`, `lib/`, `supabase/` vào project Next.js của CRM
 2. Supabase → SQL Editor → chạy `supabase/migrations/20261010_tiktok_shop.sql`.
 3. Thêm biến môi trường theo `.env.example` (trên Render: Environment).
    `SUPABASE_SECRET_KEY` chỉ để ở server, không có tiền tố `NEXT_PUBLIC_`.
+   Đặt `PUBLIC_BASE_URL=https://data-mcn.onrender.com` để callback OAuth không quay về localhost.
 4. `npm install @supabase/supabase-js` (đã có).
 5. Partner Center → app *Upbase affiliate* → **Redirect URL** = `https://<domain-crm>/connect-redirect`.
 
