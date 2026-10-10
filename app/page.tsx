@@ -19,7 +19,7 @@ function fmtDate(value: string | null | undefined) { return value ? new Date(val
 export default async function Home({ searchParams }: { searchParams: Promise<{ key?: string; endpoint?: string; q?: string; date?: string }> }) {
   const params = await searchParams;
   const expected = process.env.DASHBOARD_KEY || process.env.CRON_SECRET;
-  if (!expected || params.key !== expected) return <main className="locked"><h1>TikTok Shop Sync</h1><p>Dịch vụ đang chạy.</p></main>;
+  if (!expected || params.key !== expected) return <main className="locked"><style>{css}</style><div className="locked-card" style={{ background: "#11161e", border: "1px solid #293443", borderRadius: 18, padding: 30, boxShadow: "0 24px 80px #0006" }}><p className="eyebrow">MCN DATA PLATFORM</p><h1>Mở dashboard dữ liệu</h1><p>Dữ liệu TikTok Partner được bảo vệ bằng Dashboard key. Nhập key đã cấu hình trên Render để xem report.</p><form method="get" className="locked-form"><label htmlFor="dashboard-key">Dashboard key</label><input id="dashboard-key" name="key" type="password" autoComplete="off" placeholder="Nhập Dashboard key" required /><button type="submit">Mở report</button></form><small>Key không được lưu hoặc hiển thị trên giao diện.</small></div></main>;
 
   const supabase = createAdminClient();
   const [connectionsResult, runsResult, rawResult, metricsResult] = await Promise.all([
