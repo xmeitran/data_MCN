@@ -4,6 +4,29 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
+const CONNECTION_CONCURRENCY = 4;
+const CONTEXT_CONCURRENCY = 6;
+const UPSERT_BATCH_SIZE = 500;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function consume() {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
+  return results;
+}
 
 type Connection = {
   id: string;
@@ -150,11 +173,13 @@ async function persistMetricPoints(
     })),
   );
   if (!points.length) return;
-  const { error } = await supabase.from("tts_metric_points").upsert(points, {
-    onConflict: "connection_id,endpoint_key,record_key,metric_key",
-  });
-  // Cho phép deploy code trước migration; raw records vẫn phải sync bình thường.
-  if (error && error.code !== "42P01") throw error;
+  for (let i = 0; i < points.length; i += UPSERT_BATCH_SIZE) {
+    const { error } = await supabase.from("tts_metric_points").upsert(points.slice(i, i + UPSERT_BATCH_SIZE), {
+      onConflict: "connection_id,endpoint_key,record_key,metric_key",
+    });
+    // Cho phép deploy code trước migration; raw records vẫn phải sync bình thường.
+    if (error && error.code !== "42P01") throw error;
+  }
 }
 
 /** Chỉ asset Affiliate Partner mới dùng được cho campaign APIs.
@@ -212,10 +237,10 @@ async function syncEndpoint(
       };
     });
 
-    for (let i = 0; i < rows.length; i += 500) {
+    for (let i = 0; i < rows.length; i += UPSERT_BATCH_SIZE) {
       const { error } = await supabase
         .from("tts_raw_records")
-        .upsert(rows.slice(i, i + 500), { onConflict: "connection_id,endpoint_key,record_key" });
+        .upsert(rows.slice(i, i + UPSERT_BATCH_SIZE), { onConflict: "connection_id,endpoint_key,record_key" });
       if (error) throw error;
     }
     await persistMetricPoints(supabase, connectionId, ep, rows);
@@ -232,8 +257,6 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
   const window = opts.window ?? yesterdayWindowVN();
 
   const { data: run } = await supabase.from("tts_sync_runs").insert({}).select("id").single();
-  const stats: Record<string, number> = {};
-  const errors: { open_id: string; endpoint?: string; error: string }[] = [];
 
   const { data: conns, error } = await supabase
     .from("tts_connections")
@@ -243,8 +266,9 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
     .eq("status", "active");
   if (error) throw error;
 
-
-  for (const c of (conns ?? []) as Connection[]) {
+  const syncConnection = async (c: Connection) => {
+    const stats: Record<string, number> = {};
+    const errors: { open_id: string; endpoint?: string; error: string }[] = [];
     let token: string;
     try {
       token = await ensureFreshToken(supabase, c);
@@ -255,7 +279,7 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
         .update({ status: "reauth_required", last_error: String(e.message ?? e) })
         .eq("id", c.id);
       errors.push({ open_id: c.open_id, error: `refresh: ${e.message ?? e}` });
-      continue;
+      return { stats, errors };
     }
 
     // Chưa rõ loại tài khoản -> thử gọi API partner; thành công thì đánh dấu là Partner
@@ -287,15 +311,20 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
             .map((p) => ({ id: String(p?.id ?? p?.campaign_id ?? ""), cipher: p?._cipher }))
             .filter((x) => x.id);
         }
-        for (const ctx of ctxs) {
+        const contextResults = await mapWithConcurrency(ctxs, CONTEXT_CONCURRENCY, async (ctx) => {
           try {
-            const n = await syncEndpoint(supabase, c.id, token, ep, window, ctx);
-            stats[ep.key] = (stats[ep.key] ?? 0) + n;
+            return { count: await syncEndpoint(supabase, c.id, token, ep, window, ctx) };
           } catch (e: any) {
             const msg = e instanceof TikTokApiError ? e.message : String(e.message ?? e);
             const where = ctx.id ? `${ep.key}:${ctx.id}` : ep.key;
-            errors.push({ open_id: c.open_id, endpoint: where, error: msg });
-            connErrors.push(`${where}: ${msg}`);
+            return { count: 0, error: { open_id: c.open_id, endpoint: where, error: msg }, message: `${where}: ${msg}` };
+          }
+        });
+        for (const result of contextResults) {
+          stats[ep.key] = (stats[ep.key] ?? 0) + result.count;
+          if (result.error) {
+            errors.push(result.error);
+            connErrors.push(result.message!);
           }
         }
       } catch (e: any) {
@@ -313,6 +342,20 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
         last_error: connErrors.length ? connErrors.join("\n").slice(0, 4000) : null,
       })
       .eq("id", c.id);
+
+    return { stats, errors };
+  };
+
+  const connectionResults = await mapWithConcurrency(
+    (conns ?? []) as Connection[],
+    CONNECTION_CONCURRENCY,
+    syncConnection,
+  );
+  const stats: Record<string, number> = {};
+  const errors: { open_id: string; endpoint?: string; error: string }[] = [];
+  for (const result of connectionResults) {
+    for (const [key, count] of Object.entries(result.stats)) stats[key] = (stats[key] ?? 0) + count;
+    errors.push(...result.errors);
   }
 
   const result = {
