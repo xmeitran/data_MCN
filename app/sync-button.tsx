@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-export function SyncButton({ accessKey }: { accessKey: string }) {
+export function SyncButton({ accessKey, from, to }: { accessKey: string; from?: string; to?: string }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -10,22 +10,24 @@ export function SyncButton({ accessKey }: { accessKey: string }) {
     setBusy(true);
     setMessage("Đang đồng bộ theo từng ngày…");
     try {
-      let from: string | null = null;
+      let nextDate: string | null = from || null;
+      const endDate = to || undefined;
       let guard = 0;
       do {
         const query = new URLSearchParams({ mode: "full" });
-        if (from) query.set("from", from);
+        if (nextDate) query.set("from", nextDate);
+        if (endDate) query.set("to", endDate);
         const response = await fetch(`/api/cron/tiktok-sync?${query}`, {
           method: "POST",
           headers: { Authorization: `Bearer ${accessKey}` },
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "Sync failed");
-        from = result.nextDate;
+        nextDate = result.nextDate;
         guard += 1;
-        if (from) setMessage(`Đã xử lý ${result.processedDays} ngày, tiếp tục từ ${from}…`);
-      } while (from && guard < 100);
-      if (from) throw new Error("Sync chưa hoàn tất, hãy bấm lại để tiếp tục từ checkpoint");
+        if (nextDate) setMessage(`Đã xử lý ${result.processedDays} ngày, tiếp tục từ ${nextDate}…`);
+      } while (nextDate && guard < 100);
+      if (nextDate) throw new Error("Sync chưa hoàn tất, hãy bấm lại để tiếp tục từ checkpoint");
       setMessage("Đồng bộ hoàn tất. Đang tải lại dữ liệu…");
       window.location.reload();
     } catch (error) {
