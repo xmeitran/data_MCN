@@ -544,13 +544,18 @@ export async function defaultFullSyncStartDate() {
 /** Processes a bounded date batch; checkpoints make repeated calls safe and resumable. */
 export async function runSyncRange(opts: { from: string; to: string; maxDays?: number; budgetMs?: number }) {
   const started = Date.now();
-  const maxDays = Math.max(1, Math.min(opts.maxDays ?? 4, 14));
+  // Một ngày/request cho phép nhiều connection hoàn tất trước khi Render timeout.
+  // Nút trên dashboard sẽ gọi tiếp ngày kế tiếp bằng nextDate.
+  const maxDays = Math.max(1, Math.min(opts.maxDays ?? 1, 14));
   const results: unknown[] = [];
   let date = opts.from;
   let processed = 0;
   while (date <= opts.to && processed < maxDays && Date.now() - started < (opts.budgetMs ?? 230_000)) {
     const remaining = (opts.budgetMs ?? 230_000) - (Date.now() - started);
-    const result = await runSync({ window: dateWindowVN(date), budgetMs: Math.min(45_000, Math.max(10_000, remaining - 5_000)) });
+    const result = await runSync({
+      window: dateWindowVN(date),
+      budgetMs: Math.min(210_000, Math.max(10_000, remaining - 5_000)),
+    });
     results.push(result);
     processed += 1;
     const hasBudgetError = result.errors.some((error) => String(error.error).includes("sync budget reached"));
