@@ -18,6 +18,8 @@ function concurrencyFromEnv(name: string, fallback: number) {
 const CONNECTION_CONCURRENCY = concurrencyFromEnv("TTS_SYNC_CONNECTION_CONCURRENCY", 4);
 const CONTEXT_CONCURRENCY = concurrencyFromEnv("TTS_SYNC_CONTEXT_CONCURRENCY", 6);
 
+export type SyncWindowOptions = { window?: SyncWindow; budgetMs?: number };
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -60,6 +62,11 @@ export function yesterdayWindowVN(now = new Date()): SyncWindow {
     endUnix: startUnix + 86400,
     date: new Date(startVN).toISOString().slice(0, 10),
   };
+}
+
+export function dateWindowVN(date: string): SyncWindow {
+  const startUnix = Math.floor(Date.parse(`${date}T00:00:00+07:00`) / 1000);
+  return { startUnix, endUnix: startUnix + 86400, date };
 }
 
 async function ensureFreshToken(
@@ -218,6 +225,9 @@ function extractMetricPoints(value: unknown, path = "data", dimensions: Record<s
       return [];
     }
     const nextPath = path === "data" ? key : `${path}.${key}`;
+    if (typeof child === "string" && /^(?:-?\d+(?:\.\d+)?)$/.test(child) && /amount|value|rate|count|quantity|orders?|views?|gmv|nmv|commission|followers?|likes?|comments?|shares?|clicks?|duration|hours?|sold/i.test(key)) {
+      return [{ metric_key: nextPath, metric_value: Number(child), dimensions }];
+    }
     if (typeof child === "string" && (key === "name" || key === "title" || key === "type")) {
       return extractMetricPoints({}, nextPath, { ...dimensions, [key]: child });
     }
@@ -325,10 +335,10 @@ async function syncEndpoint(
   return total;
 }
 
-export async function runSync(opts: { window?: SyncWindow } = {}) {
+export async function runSync(opts: SyncWindowOptions = {}) {
   const supabase = createAdminClient();
   const window = opts.window ?? yesterdayWindowVN();
-  const deadline = Date.now() + SYNC_BUDGET_MS;
+  const deadline = Date.now() + (opts.budgetMs ?? SYNC_BUDGET_MS);
 
   const staleBefore = new Date(Date.now() - STALE_RUN_MS).toISOString();
   await supabase
@@ -516,4 +526,36 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
       .eq("id", run.id);
   }
   return result;
+}
+
+function addDays(date: string, days: number) {
+  const value = new Date(`${date}T00:00:00+07:00`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+export async function defaultFullSyncStartDate() {
+  if (process.env.TTS_FULL_SYNC_START_DATE) return process.env.TTS_FULL_SYNC_START_DATE;
+  const supabase = createAdminClient();
+  const { data } = await supabase.from("tts_connections").select("created_at").order("created_at", { ascending: true }).limit(1).maybeSingle();
+  return data?.created_at ? new Date(data.created_at).toISOString().slice(0, 10) : yesterdayWindowVN().date;
+}
+
+/** Processes a bounded date batch; checkpoints make repeated calls safe and resumable. */
+export async function runSyncRange(opts: { from: string; to: string; maxDays?: number; budgetMs?: number }) {
+  const started = Date.now();
+  const maxDays = Math.max(1, Math.min(opts.maxDays ?? 4, 14));
+  const results: unknown[] = [];
+  let date = opts.from;
+  let processed = 0;
+  while (date <= opts.to && processed < maxDays && Date.now() - started < (opts.budgetMs ?? 230_000)) {
+    const remaining = (opts.budgetMs ?? 230_000) - (Date.now() - started);
+    const result = await runSync({ window: dateWindowVN(date), budgetMs: Math.min(45_000, Math.max(10_000, remaining - 5_000)) });
+    results.push(result);
+    processed += 1;
+    const hasBudgetError = result.errors.some((error) => String(error.error).includes("sync budget reached"));
+    if (hasBudgetError) break;
+    date = addDays(date, 1);
+  }
+  return { from: opts.from, to: opts.to, nextDate: date <= opts.to ? date : null, processedDays: processed, results };
 }

@@ -1,5 +1,6 @@
 import { loadDashboardData, type DashboardData } from "@/lib/mcn/dashboard";
 import { Icon, type IconName } from "./icons";
+import { SyncButton } from "./sync-button";
 import { Brands, Creators, Deals, Discover, Operations, Overview, Reports, Soon, fmtDate, latestProfiles, queryFor, type DashboardFilters, type View, type ViewProps } from "./views";
 
 export const dynamic = "force-dynamic";
@@ -170,6 +171,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
             <Icon name="search" size={16} />
             <input name="q" type="search" aria-label="Tìm creator trong workspace" placeholder="Search" />
           </form>
+          <SyncButton accessKey={accessKey} />
           <a className="topbar-link" href="/">Khóa</a>
           <span className="user-avatar" aria-hidden="true">MCN</span>
         </header>

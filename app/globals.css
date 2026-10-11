@@ -87,6 +87,8 @@ small { font-size: 12px; }
 .global-search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; }
 .topbar-link { color: var(--muted); font-size: 13px; font-weight: 600; }
 .topbar-link:hover { color: var(--ink); }
+.sync-control { display: inline-flex; align-items: center; gap: 8px; }
+.sync-control small { max-width: 190px; color: var(--muted); font-size: 11px; }
 .user-avatar { display: grid; flex: 0 0 auto; width: 30px; height: 30px; place-items: center; color: var(--muted); border: 1px solid var(--line); border-radius: 50%; font-size: 9px; font-weight: 700; }
 
 .page-content { display: flex; flex-direction: column; gap: 12px; max-width: 1600px; padding: 12px 20px 56px; }
