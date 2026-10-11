@@ -1,6 +1,7 @@
 import { callApi, refreshToken, TikTokApiError } from "./client";
 import { ENDPOINTS, PARTNER_ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isBusinessMetricPath } from "@/lib/metrics";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
@@ -211,7 +212,7 @@ class SyncBudgetExceeded extends Error {
 /** Tách mọi số đo trong response nhưng bỏ qua id/thời gian/mã kỹ thuật. */
 function extractMetricPoints(value: unknown, path = "data", dimensions: Record<string, string> = {}): MetricPoint[] {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return [{ metric_key: path, metric_value: value, dimensions }];
+    return isBusinessMetricPath(path) ? [{ metric_key: path, metric_value: value, dimensions }] : [];
   }
   if (Array.isArray(value)) {
     return value.flatMap((item, index) => extractMetricPoints(item, `${path}[${index}]`, dimensions));
@@ -229,7 +230,7 @@ function extractMetricPoints(value: unknown, path = "data", dimensions: Record<s
     }
     const nextPath = path === "data" ? key : `${path}.${key}`;
     if (typeof child === "string" && /^(?:-?\d+(?:\.\d+)?)$/.test(child) && /amount|value|rate|count|quantity|orders?|views?|gmv|nmv|commission|followers?|likes?|comments?|shares?|clicks?|duration|hours?|sold/i.test(key)) {
-      return [{ metric_key: nextPath, metric_value: Number(child), dimensions }];
+      return isBusinessMetricPath(nextPath) ? [{ metric_key: nextPath, metric_value: Number(child), dimensions }] : [];
     }
     if (typeof child === "string" && (key === "name" || key === "title" || key === "type")) {
       return extractMetricPoints({}, nextPath, { ...dimensions, [key]: child });

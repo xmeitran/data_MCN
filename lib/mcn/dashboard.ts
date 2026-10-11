@@ -1,4 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
+import { canonicalMetricKey, isBusinessMetricPath } from "@/lib/metrics";
 
 export type Creator = {
   id: string;
@@ -158,6 +159,24 @@ async function safeRows<T>(query: PromiseLike<QueryResult<T>>, label: string, wa
   return result.data ?? [];
 }
 
+function normalizeMetricRows(rows: MetricDailyRow[]) {
+  const grouped = new Map<string, MetricDailyRow>();
+  for (const row of rows) {
+    if (!isBusinessMetricPath(row.metric_path)) continue;
+    const metricKey = canonicalMetricKey(row.metric_path);
+    const key = [row.creator_id ?? "", row.metric_date ?? "", row.endpoint_key, metricKey].join("|");
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, { ...row, metric_key: metricKey, metric_path: metricKey });
+      continue;
+    }
+    const observations = Number(current.observations || 0) + Number(row.observations || 0);
+    const total = Number(current.total_value || 0) + Number(row.total_value || 0);
+    grouped.set(key, { ...current, metric_key: metricKey, metric_path: metricKey, observations, total_value: total, average_value: observations ? total / observations : null });
+  }
+  return [...grouped.values()];
+}
+
 export async function loadDashboardData(): Promise<DashboardData> {
   const warnings: string[] = [];
 
@@ -283,5 +302,5 @@ export async function loadDashboardData(): Promise<DashboardData> {
     ),
   ]);
 
-  return { creators, profiles, brands, campaigns, deals, bookings, tasks, issues, metricDaily, metricDefinitions, connections, syncRuns, warnings };
+  return { creators, profiles, brands, campaigns, deals, bookings, tasks, issues, metricDaily: normalizeMetricRows(metricDaily), metricDefinitions, connections, syncRuns, warnings };
 }

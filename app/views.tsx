@@ -1,5 +1,6 @@
 import type { Creator, CreatorProfile, DashboardData } from "@/lib/mcn/dashboard";
 import { Icon } from "./icons";
+import { metricDomain, metricLabel } from "@/lib/metrics";
 
 export type View = "overview" | "discover" | "brands" | "creators" | "deals" | "reports" | "operations" | "soon";
 
@@ -25,6 +26,8 @@ const endpointLabels: Record<string, string> = {
   live_product_stats: "LIVE product",
   partner_campaigns: "Partner campaigns",
   partner_campaign_performance: "Campaign performance",
+  showcase_products: "Showcase products",
+  sample_applications: "Sample applications",
 };
 
 const sortFields = {
@@ -252,7 +255,7 @@ export function Overview({ data, accessKey, filters }: ViewProps) {
     .sort((a, b) => Number(b.profile?.gmv ?? 0) - Number(a.profile?.gmv ?? 0))
     .slice(0, 8);
   const range = rangeLabel(filters);
-  const observedMetrics = [...new Map(data.metricDaily.map((row) => [row.metric_path, row])).values()]
+  const observedMetrics = [...new Map(data.metricDaily.map((row) => [row.metric_key, row])).values()]
     .sort((a, b) => Math.abs(Number(b.total_value ?? 0)) - Math.abs(Number(a.total_value ?? 0)));
   const queue = [
     ...openTasks.slice(0, 3).map((task) => ({ key: task.id, title: task.title, meta: `${task.task_type} · ${task.owner_name || "Chưa giao"}`, status: task.priority })),
@@ -286,7 +289,7 @@ export function Overview({ data, accessKey, filters }: ViewProps) {
             <tbody>
               {observedMetrics.map((row) => (
                 <tr key={`${row.metric_path}-${row.endpoint_key}`}>
-                  <td><strong>{row.metric_path}</strong></td>
+                  <td><strong>{metricLabel(row.metric_key)}</strong><small className="mono">{row.metric_key}</small></td>
                   <td>{row.endpoint_key}</td>
                   <td>{row.metric_date || "—"}</td>
                   <td>{fmtNumber(row.observations)}</td>
@@ -627,12 +630,12 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
   const snapshots = [...profiles.values()];
   const selectedEndpoint = params.endpoint || "all";
   const endpoints = [...new Set(data.metricDaily.map((row) => row.endpoint_key))].sort();
-  const observedMetricPaths = [...new Set(data.metricDaily.map((row) => row.metric_path))].sort();
+  const observedMetricPaths = [...new Set(data.metricDaily.map((row) => row.metric_key))].sort();
   const definitionByKey = new Map(data.metricDefinitions.map((definition) => [definition.metric_key, definition]));
   const metricOptions = observedMetricPaths.map((path) => {
-    const leaf = path.split(".").pop()?.replace(/\[\d+\]/g, "") || path;
+    const leaf = path;
     const definition = definitionByKey.get(path) || definitionByKey.get(leaf);
-    return { path, leaf, domain: definition?.domain || "other", label: definition?.display_name || leaf.replaceAll("_", " ") };
+    return { path, leaf, domain: definition?.domain || metricDomain(path), label: definition?.display_name || metricLabel(path) };
   });
   const requestedMetrics = (params.metric || "").split(",").map((value) => value.trim()).filter(Boolean);
   const hasExplicitMetricSelection = params.metricConfigured === "1";
@@ -661,14 +664,14 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
       <Kpi label="GMV" hint="Tổng GMV từ snapshot mới nhất của từng creator" value={fmtCurrency(sum(snapshots, "gmv"))} caption={rangeLabel(filters)} />
       <Kpi label="Orders" hint="Tổng đơn hàng trong snapshot" value={fmtNumber(sum(snapshots, "orders"))} caption={rangeLabel(filters)} />
       <Kpi label="Product Clicks" hint="Lượt click vào sản phẩm" value={fmtCompact(sum(snapshots, "product_clicks"))} caption="Traffic to product" />
-      <Kpi label="API Metrics" hint="Số metric raw đã lấy từ các endpoint TikTok" value={fmtNumber(observedMetricPaths.length)} caption={`${fmtNumber(data.metricDaily.length)} dòng tổng hợp`} />
-      {dynamicCards.slice(0, 4).map((row) => <Kpi key={row.metric_path} label={row.metric_path} hint={`Metric trả về từ ${row.endpoint_key}`} value={fmtNumber(row.total_value, 2)} caption={`${fmtNumber(row.observations)} observations`} />)}
+      <Kpi label="Business metrics" hint="Metric nghiệp vụ sau khi xử lý JSON TikTok" value={fmtNumber(observedMetricPaths.length)} caption={`${fmtNumber(data.metricDaily.length)} dòng tổng hợp`} />
+      {dynamicCards.slice(0, 4).map((row) => <Kpi key={row.metric_key} label={metricLabel(row.metric_key)} hint={`Metric chuẩn hóa từ ${row.endpoint_key}`} value={fmtNumber(row.total_value, 2)} caption={`${fmtNumber(row.observations)} observations`} />)}
     </div>
     <section className="card metric-explorer">
       <CardHeader
         title="All API metrics"
         count={observedMetricPaths.length}
-        detail="Tất cả metric TikTok đã trả về đều được liệt kê; có thể lọc theo endpoint và chọn tab riêng"
+        detail="JSON raw vẫn được lưu để audit; bảng này chỉ hiển thị metric nghiệp vụ đã chuẩn hóa"
         action={<span className="chip">{fmtNumber(selectedPaths.length)} metric đang chọn</span>}
       />
       <div className="metric-tabs" role="tablist" aria-label="Metric endpoints">
@@ -708,11 +711,11 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
         <div className="table-scroll">
           <table className="data-table">
             <thead><tr><th>Creator ID</th><th>Ngày</th><th>Endpoint</th><th>Metric path</th><th>Observations</th><th>Total</th><th>Average</th></tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={`${row.creator_id}-${row.metric_path}-${row.metric_date}-${index}`}>
+            <tbody>{rows.map((row, index) => <tr key={`${row.creator_id}-${row.metric_key}-${row.metric_date}-${index}`}>
               <td className="mono">{row.creator_id ? row.creator_id.slice(0, 8) : "—"}</td>
               <td>{fmtDate(row.metric_date)}</td>
               <td>{endpointLabels[row.endpoint_key] || row.endpoint_key}</td>
-              <td className="mono">{row.metric_path}</td>
+              <td><strong>{metricLabel(row.metric_key)}</strong><small className="mono">{row.metric_key}</small></td>
               <td>{fmtNumber(row.observations)}</td>
               <td>{fmtNumber(row.total_value, 2)}</td>
               <td>{fmtNumber(row.average_value, 2)}</td>
