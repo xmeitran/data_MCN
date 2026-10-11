@@ -183,6 +183,40 @@ function checkpointKey(ctx: Ctx) {
   return "root";
 }
 
+async function persistApiData(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  ep: EndpointDef,
+  ctx: Ctx,
+  snapshotDate: string,
+  page: number,
+  pageToken: string | undefined,
+  req: { path?: string; query?: Record<string, string | number | undefined>; body?: unknown },
+  responseData: unknown,
+) {
+  const { error } = await supabase.from("api_data").upsert(
+    {
+      connection_id: connectionId,
+      endpoint_key: ep.key,
+      method: ep.method,
+      path: req.path ?? ep.path,
+      context_key: checkpointKey(ctx),
+      page_number: page,
+      page_token: pageToken ?? null,
+      request_query: req.query ?? {},
+      request_body: req.body ?? {},
+      response_data: responseData ?? {},
+      response_code: 0,
+      snapshot_date: snapshotDate,
+      fetched_at: new Date().toISOString(),
+    },
+    { onConflict: "connection_id,endpoint_key,context_key,snapshot_date,page_number" },
+  );
+  // Code can be deployed before the migration; the existing normalized sync
+  // must remain usable during that rollout.
+  if (error && error.code !== "42P01") throw error;
+}
+
 async function checkpointIsComplete(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
@@ -336,6 +370,7 @@ async function syncEndpoint(
       query: req.query,
       body: req.body,
     });
+    await persistApiData(supabase, connectionId, ep, ctx, window.date, page, pageToken, req, data);
 
     // Nếu tên field danh sách khác tài liệu, tự lấy mảng đầu tiên trong `data`
     const items: any[] =
