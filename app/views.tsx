@@ -710,7 +710,7 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
       {rows.length ? (
         <div className="table-scroll">
           <table className="data-table">
-            <thead><tr><th>Creator ID</th><th>Ngày</th><th>Endpoint</th><th>Metric path</th><th>Observations</th><th>Total</th><th>Average</th></tr></thead>
+            <thead><tr><th>Creator ID</th><th>Ngày</th><th>Endpoint</th><th>Metric</th><th>Observations</th><th>Total</th><th>Average</th></tr></thead>
             <tbody>{rows.map((row, index) => <tr key={`${row.creator_id}-${row.metric_key}-${row.metric_date}-${index}`}>
               <td className="mono">{row.creator_id ? row.creator_id.slice(0, 8) : "—"}</td>
               <td>{fmtDate(row.metric_date)}</td>
@@ -753,7 +753,7 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
         ) : <EmptyState title="Chưa có report" detail="Cần creator snapshot để tạo report theo Creator." />}
       </section>
       <section className="card">
-        <CardHeader title="Metric Coverage" detail="Raw path vẫn được giữ để audit" />
+        <CardHeader title="Metric Coverage" detail="Metric nghiệp vụ đã chuẩn hóa; JSON gốc vẫn được giữ để audit" />
         {rows.length ? (
           <div className="row-list">
             {rows.slice(0, 12).map((row, index) => (
