@@ -43,8 +43,16 @@ export type CreatorProfile = {
   product_orders: number | null;
 };
 
+export type Brand = {
+  id: string;
+  name: string;
+  status: string;
+  contact_name: string | null;
+};
+
 export type Campaign = {
   id: string;
+  brand_id: string | null;
   name: string;
   campaign_type: string;
   status: string;
@@ -113,15 +121,27 @@ export type MetricDailyRow = {
   average_value: number | null;
 };
 
+export type MetricDefinition = {
+  metric_key: string;
+  display_name: string;
+  domain: string;
+  unit: string;
+  source_endpoint: string | null;
+  description: string | null;
+  is_kpi: boolean;
+};
+
 export type DashboardData = {
   creators: Creator[];
   profiles: CreatorProfile[];
+  brands: Brand[];
   campaigns: Campaign[];
   deals: Deal[];
   bookings: Booking[];
   tasks: Task[];
   issues: Issue[];
   metricDaily: MetricDailyRow[];
+  metricDefinitions: MetricDefinition[];
   connections: { id: string; status: string; user_type: number | null; last_synced_at: string | null }[];
   syncRuns: { id: number; status: string; started_at: string; finished_at: string | null }[];
   warnings: string[];
@@ -149,19 +169,21 @@ export async function loadDashboardData(): Promise<DashboardData> {
     return {
       creators: [],
       profiles: [],
+      brands: [],
       campaigns: [],
       deals: [],
       bookings: [],
       tasks: [],
       issues: [],
       metricDaily: [],
+      metricDefinitions: [],
       connections: [],
       syncRuns: [],
       warnings,
     };
   }
 
-  const [creators, profiles, campaigns, deals, bookings, tasks, issues, metricDaily, connections, syncRuns] = await Promise.all([
+  const [creators, profiles, brands, campaigns, deals, bookings, tasks, issues, metricDaily, metricDefinitions, connections, syncRuns] = await Promise.all([
     safeRows<Creator>(
       supabase
         .from("mcn_creators")
@@ -180,10 +202,15 @@ export async function loadDashboardData(): Promise<DashboardData> {
       "Creator performance",
       warnings,
     ),
+    safeRows<Brand>(
+      supabase.from("mcn_brands").select("id, name, status, contact_name").order("name").limit(500),
+      "Brands",
+      warnings,
+    ),
     safeRows<Campaign>(
       supabase
         .from("mcn_campaigns")
-        .select("id, name, campaign_type, status, owner_name, starts_at, ends_at, target_gmv, target_orders")
+        .select("id, brand_id, name, campaign_type, status, owner_name, starts_at, ends_at, target_gmv, target_orders")
         .order("starts_at", { ascending: false })
         .limit(200),
       "Campaigns",
@@ -230,8 +257,18 @@ export async function loadDashboardData(): Promise<DashboardData> {
         .from("mcn_metric_daily_report")
         .select("creator_id, metric_date, endpoint_key, metric_key, metric_path, observations, total_value, average_value")
         .order("metric_date", { ascending: false, nullsFirst: false })
-        .limit(2000),
+        .limit(10000),
       "Metric warehouse",
+      warnings,
+    ),
+    safeRows<MetricDefinition>(
+      supabase
+        .from("mcn_metric_definitions")
+        .select("metric_key, display_name, domain, unit, source_endpoint, description, is_kpi")
+        .order("domain")
+        .order("display_name")
+        .limit(500),
+      "Metric definitions",
       warnings,
     ),
     safeRows<{ id: string; status: string; user_type: number | null; last_synced_at: string | null }>(
@@ -246,5 +283,5 @@ export async function loadDashboardData(): Promise<DashboardData> {
     ),
   ]);
 
-  return { creators, profiles, campaigns, deals, bookings, tasks, issues, metricDaily, connections, syncRuns, warnings };
+  return { creators, profiles, brands, campaigns, deals, bookings, tasks, issues, metricDaily, metricDefinitions, connections, syncRuns, warnings };
 }

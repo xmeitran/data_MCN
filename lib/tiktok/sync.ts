@@ -6,6 +6,9 @@ const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token l�
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
 const UPSERT_BATCH_SIZE = 500;
 const STALE_RUN_MS = 10 * 60 * 1000;
+// Render giới hạn request khoảng 300s. Chừa thời gian để ghi trạng thái run
+// và trả response; lượt cron sau sẽ tiếp tục nhờ checkpoint.
+const SYNC_BUDGET_MS = concurrencyFromEnv("TTS_SYNC_BUDGET_MS", 240_000);
 
 function concurrencyFromEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -188,6 +191,13 @@ type MetricPoint = {
   dimensions: Record<string, string>;
 };
 
+class SyncBudgetExceeded extends Error {
+  constructor() {
+    super("sync budget reached; next cron run will continue from checkpoints");
+    this.name = "SyncBudgetExceeded";
+  }
+}
+
 /** Tách mọi số đo trong response nhưng bỏ qua id/thời gian/mã kỹ thuật. */
 function extractMetricPoints(value: unknown, path = "data", dimensions: Record<string, string> = {}): MetricPoint[] {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -260,12 +270,14 @@ async function syncEndpoint(
   ep: EndpointDef,
   window: SyncWindow,
   ctx: Ctx = {},
+  deadline = Number.POSITIVE_INFINITY,
 ): Promise<number> {
   const { id, cipher } = ctx;
   let pageToken: string | undefined;
   let total = 0;
 
   for (let page = 0; page < MAX_PAGES; page++) {
+    if (Date.now() >= deadline) throw new SyncBudgetExceeded();
     const req = ep.buildRequest({ pageToken, window, id, cipher });
     const data: any = await callApi({
       method: ep.method,
@@ -316,6 +328,7 @@ async function syncEndpoint(
 export async function runSync(opts: { window?: SyncWindow } = {}) {
   const supabase = createAdminClient();
   const window = opts.window ?? yesterdayWindowVN();
+  const deadline = Date.now() + SYNC_BUDGET_MS;
 
   const staleBefore = new Date(Date.now() - STALE_RUN_MS).toISOString();
   await supabase
@@ -374,6 +387,12 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
     const stats: Record<string, number> = {};
     const errors: { open_id: string; endpoint?: string; error: string }[] = [];
     let token: string;
+    if (Date.now() >= deadline) {
+      return {
+        stats,
+        errors: [{ open_id: c.open_id, error: "sync budget reached; waiting for next cron run" }],
+      };
+    }
     try {
       token = await ensureFreshToken(supabase, c);
     } catch (e: any) {
@@ -400,6 +419,10 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
     const endpoints = (isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS).filter((e) => e.enabled);
     const connErrors: string[] = [];
     for (const ep of endpoints) {
+      if (Date.now() >= deadline) {
+        connErrors.push("sync budget reached; waiting for next cron run");
+        break;
+      }
       try {
         let ctxs: Ctx[] = [{}];
         if (ep.forEach === "live_room") {
@@ -416,11 +439,18 @@ export async function runSync(opts: { window?: SyncWindow } = {}) {
             .filter((x) => x.id);
         }
         const contextResults = await mapWithConcurrency(ctxs, CONTEXT_CONCURRENCY, async (ctx) => {
+          if (Date.now() >= deadline) {
+            return {
+              count: 0,
+              error: { open_id: c.open_id, endpoint: ep.key, error: "sync budget reached; waiting for next cron run" },
+              message: `${ep.key}: sync budget reached; waiting for next cron run`,
+            };
+          }
           if (await checkpointIsComplete(supabase, c.id, ep.key, ctx, window.date)) {
             return { count: 0 };
           }
           try {
-            const count = await syncEndpoint(supabase, c.id, token, ep, window, ctx);
+            const count = await syncEndpoint(supabase, c.id, token, ep, window, ctx, deadline);
             await saveCheckpoint(supabase, c.id, ep.key, ctx, window.date, "success", count);
             return { count };
           } catch (e: any) {
