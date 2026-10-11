@@ -273,10 +273,19 @@ export async function loadDashboardData(): Promise<DashboardData> {
     ),
     safeRows<MetricDailyRow>(
       supabase
-        .from("mcn_metric_daily_report")
-        .select("creator_id, metric_date, endpoint_key, metric_key, metric_path, observations, total_value, average_value")
+        .from("mcn_metric_points")
+        .select("creator_id, metric_date, endpoint_key, metric_key, metric_path, metric_value")
         .order("metric_date", { ascending: false, nullsFirst: false })
-        .limit(10000),
+        .limit(20000)
+        .then(({ data, error }) => ({
+          data: (data ?? []).map((row) => ({
+            ...row,
+            observations: 1,
+            total_value: row.metric_value,
+            average_value: row.metric_value,
+          })),
+          error,
+        })),
       "Metric warehouse",
       warnings,
     ),
