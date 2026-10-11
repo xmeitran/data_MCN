@@ -220,10 +220,10 @@ export const PARTNER_ENDPOINTS: EndpointDef[] = [
   },
   {
     // Đơn affiliate của toàn bộ creator thuộc MCN (CAP).
-    // App hiện chưa được cấp scope CAP nên không chạy endpoint này.
+    // Chỉ chạy khi Partner Center đã cấp đúng scope cho connection.
     key: "partner_cap_orders",
     scope: "partner.cap_orders.read",
-    enabled: false,
+    enabled: true,
     userType: 3,
     forEach: "category_asset",
     method: "POST",

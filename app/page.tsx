@@ -16,7 +16,7 @@ const navEntries: (NavLeaf | NavGroup)[] = [
     label: "Social Intelligence",
     icon: "intel",
     children: [
-      { label: "Benchmarks", view: "reports" },
+      { label: "Metrics & Reports", view: "reports" },
       { label: "Brands", view: "brands" },
       { label: "Products", view: "soon" },
       { label: "Creators", view: "discover" },

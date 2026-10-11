@@ -91,25 +91,28 @@ async function ensureFreshToken(
   return t.access_token;
 }
 
-/** Lấy danh sách live_room_id từ các đơn affiliate (content_type = LIVE) trong ngày */
+/** Lấy live_room_id từ các payload affiliate gần đây để gọi analytics live. */
 async function liveRoomIds(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
   window: SyncWindow,
 ): Promise<string[]> {
+  const since = new Date(Date.parse(`${window.date}T00:00:00Z`) - 7 * 86400 * 1000).toISOString().slice(0, 10);
   const { data, error } = await supabase
     .from("tts_raw_records")
     .select("payload")
     .eq("connection_id", connectionId)
     .eq("endpoint_key", "affiliate_orders")
-    .eq("snapshot_date", window.date);
+    .gte("snapshot_date", since);
   if (error) throw error;
   const ids = new Set<string>();
   for (const row of data ?? []) {
     const o: any = row.payload;
     for (const s of [o, ...(Array.isArray(o?.skus) ? o.skus : [])]) {
-      if (String(s?.content_type ?? "").toUpperCase() === "LIVE" && s?.content_id) {
-        ids.add(String(s.content_id));
+      const isLive = String(s?.content_type ?? s?.content_type_name ?? "").toUpperCase() === "LIVE";
+      const id = s?.live_room_id ?? s?.live_id ?? (isLive ? s?.content_id : undefined);
+      if (id) {
+        ids.add(String(id));
       }
     }
   }
@@ -426,7 +429,9 @@ export async function runSync(opts: SyncWindowOptions = {}) {
       await supabase.from("tts_connections").update({ user_type: c.user_type }).eq("id", c.id);
     }
 
-    const endpoints = (isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS).filter((e) => e.enabled);
+    const endpoints = (isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS)
+      .filter((e) => e.enabled)
+      .filter((e) => e.key !== "partner_cap_orders" || (c.granted_scopes ?? []).includes(e.scope));
     const connErrors: string[] = [];
     for (const ep of endpoints) {
       if (Date.now() >= deadline) {

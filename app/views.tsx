@@ -218,7 +218,7 @@ function FilterBar({ view, accessKey, filters }: { view: View; accessKey: string
 const tabs: { label: string; view: View }[] = [
   { label: "Overview", view: "overview" },
   { label: "Creators", view: "creators" },
-  { label: "Videos", view: "reports" },
+  { label: "Metrics", view: "reports" },
   { label: "Automation", view: "operations" },
   { label: "Sample Funnel", view: "deals" },
 ];
@@ -252,6 +252,8 @@ export function Overview({ data, accessKey, filters }: ViewProps) {
     .sort((a, b) => Number(b.profile?.gmv ?? 0) - Number(a.profile?.gmv ?? 0))
     .slice(0, 8);
   const range = rangeLabel(filters);
+  const observedMetrics = [...new Map(data.metricDaily.map((row) => [row.metric_path, row])).values()]
+    .sort((a, b) => Math.abs(Number(b.total_value ?? 0)) - Math.abs(Number(a.total_value ?? 0)));
   const queue = [
     ...openTasks.slice(0, 3).map((task) => ({ key: task.id, title: task.title, meta: `${task.task_type} · ${task.owner_name || "Chưa giao"}`, status: task.priority })),
     ...openIssues.slice(0, 2).map((issue) => ({ key: issue.id, title: issue.title, meta: `${issue.category} · ${issue.owner_name || "Chưa giao"}`, status: issue.severity })),
@@ -269,6 +271,34 @@ export function Overview({ data, accessKey, filters }: ViewProps) {
       <Kpi label="LIVE GMV" hint="GMV đến từ livestream" value={fmtCurrency(sum(snapshots, "live_gmv"))} caption={`${fmtNumber(sum(snapshots, "live_hours"), 1)} giờ live`} />
       <Kpi label="Orders" hint="Tổng đơn hàng trong snapshot" value={fmtNumber(sum(snapshots, "orders"))} caption={`${fmtCompact(sum(snapshots, "product_clicks"))} product clicks`} />
     </div>
+
+    <section className="card">
+      <CardHeader
+        title="Observed TikTok metrics"
+        count={observedMetrics.length}
+        detail="Hiển thị trực tiếp mọi metric đã có trong warehouse, không giới hạn theo bộ KPI cố định"
+        action={<a className="text-link" href={`?${queryFor(accessKey, "reports", filters)}`}>Mở toàn bộ metric →</a>}
+      />
+      {observedMetrics.length ? (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead><tr><th>Metric</th><th>Endpoint</th><th>Ngày</th><th>Observations</th><th>Total</th><th>Average</th></tr></thead>
+            <tbody>
+              {observedMetrics.map((row) => (
+                <tr key={`${row.metric_path}-${row.endpoint_key}`}>
+                  <td><strong>{row.metric_path}</strong></td>
+                  <td>{row.endpoint_key}</td>
+                  <td>{row.metric_date || "—"}</td>
+                  <td>{fmtNumber(row.observations)}</td>
+                  <td className="money">{fmtNumber(row.total_value, 2)}</td>
+                  <td>{fmtNumber(row.average_value, 2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <EmptyState title="Chưa có metric từ TikTok" detail="Chạy đồng bộ để warehouse nhận dữ liệu và tự dựng bảng metric." />}
+    </section>
 
     <section className="card">
       <CardHeader
@@ -601,24 +631,24 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
   const definitionByKey = new Map(data.metricDefinitions.map((definition) => [definition.metric_key, definition]));
   const metricOptions = observedMetricPaths.map((path) => {
     const leaf = path.split(".").pop()?.replace(/\[\d+\]/g, "") || path;
-    const definition = definitionByKey.get(leaf);
-    return { path, label: definition?.display_name || leaf.replaceAll("_", " ") };
+    const definition = definitionByKey.get(path) || definitionByKey.get(leaf);
+    return { path, leaf, domain: definition?.domain || "other", label: definition?.display_name || leaf.replaceAll("_", " ") };
   });
   const requestedMetrics = (params.metric || "").split(",").map((value) => value.trim()).filter(Boolean);
   const hasExplicitMetricSelection = params.metricConfigured === "1";
   const selectedPaths = hasExplicitMetricSelection
     ? requestedMetrics.filter((path) => observedMetricPaths.includes(path))
-    : metricOptions.slice(0, 15).map((option) => option.path);
+    : metricOptions.map((option) => option.path);
   const selectedSet = new Set(selectedPaths);
-  const metricGroups = [...new Set(metricOptions.map((option) => {
-    const leaf = option.path.split(".").pop()?.replace(/\[\d+\]/g, "") || option.path;
-    return definitionByKey.get(leaf)?.domain || "other";
-  }))].sort();
+  const metricGroups = [...new Set(metricOptions.map((option) => option.domain))].sort();
   const filteredRows = data.metricDaily.filter((row) =>
     (selectedEndpoint === "all" || row.endpoint_key === selectedEndpoint) &&
     (!selectedPaths.length || selectedSet.has(row.metric_path)),
   );
-  const rows = filteredRows.slice(0, 250);
+  const rows = filteredRows;
+  const dynamicCards = [...new Map(filteredRows.map((row) => [row.metric_path, row])).values()]
+    .sort((a, b) => Math.abs(Number(b.total_value ?? 0)) - Math.abs(Number(a.total_value ?? 0)))
+    .slice(0, 8);
   const metricLink = (extra: Record<string, string | undefined>) => `?${queryFor(accessKey, "reports", filters, {
     endpoint: selectedEndpoint === "all" ? undefined : selectedEndpoint,
     metric: hasExplicitMetricSelection ? selectedPaths.join(",") : selectedPaths.length ? selectedPaths.join(",") : undefined,
@@ -632,12 +662,13 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
       <Kpi label="Orders" hint="Tổng đơn hàng trong snapshot" value={fmtNumber(sum(snapshots, "orders"))} caption={rangeLabel(filters)} />
       <Kpi label="Product Clicks" hint="Lượt click vào sản phẩm" value={fmtCompact(sum(snapshots, "product_clicks"))} caption="Traffic to product" />
       <Kpi label="API Metrics" hint="Số metric raw đã lấy từ các endpoint TikTok" value={fmtNumber(observedMetricPaths.length)} caption={`${fmtNumber(data.metricDaily.length)} dòng tổng hợp`} />
+      {dynamicCards.slice(0, 4).map((row) => <Kpi key={row.metric_path} label={row.metric_path} hint={`Metric trả về từ ${row.endpoint_key}`} value={fmtNumber(row.total_value, 2)} caption={`${fmtNumber(row.observations)} observations`} />)}
     </div>
     <section className="card metric-explorer">
       <CardHeader
         title="All API metrics"
         count={observedMetricPaths.length}
-        detail="Chọn endpoint hoặc metric raw để xem đúng dữ liệu TikTok đã trả về"
+        detail="Tất cả metric TikTok đã trả về đều được liệt kê; có thể lọc theo endpoint và chọn tab riêng"
         action={<span className="chip">{fmtNumber(selectedPaths.length)} metric đang chọn</span>}
       />
       <div className="metric-tabs" role="tablist" aria-label="Metric endpoints">
@@ -647,15 +678,12 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
       <form className="metric-picker" method="get">
         <Hidden values={{ key: accessKey, view: "reports", ...filters, endpoint: selectedEndpoint === "all" ? undefined : selectedEndpoint, metricConfigured: "1" }} />
         <div className="metric-available">
-          <div className="metric-picker-header"><strong>Select metrics</strong><a href={metricLink({ metric: metricOptions.slice(0, 15).map((option) => option.path).join(",") })}>↻ Default</a></div>
+          <div className="metric-picker-header"><strong>Select metrics</strong><a href={metricLink({ metric: metricOptions.map((option) => option.path).join(","), metricConfigured: "1" })}>↻ Chọn tất cả</a></div>
           {metricGroups.length ? metricGroups.map((group) => (
             <fieldset key={group}>
               <legend>{group.replaceAll("_", " ")}</legend>
               <div className="metric-checkbox-grid">
-                {metricOptions.filter((option) => {
-                  const leaf = option.path.split(".").pop()?.replace(/\[\d+\]/g, "") || option.path;
-                  return (definitionByKey.get(leaf)?.domain || "other") === group;
-                }).map((option) => (
+                {metricOptions.filter((option) => option.domain === group).map((option) => (
                   <label className="metric-checkbox" key={option.path}>
                     <input type="checkbox" name="metric" value={option.path} defaultChecked={selectedSet.has(option.path)} />
                     <span>{option.label}</span>
