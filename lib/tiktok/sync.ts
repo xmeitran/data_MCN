@@ -109,6 +109,23 @@ function collectLiveRoomIds(value: unknown, ids: Set<string>, liveContext = fals
   }
 }
 
+function collectVideoIds(value: unknown, ids: Set<string>, videoContext = false) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectVideoIds(item, ids, videoContext);
+    return;
+  }
+  const objectValue = value as Record<string, unknown>;
+  const objectIsVideo =
+    videoContext || String(objectValue.content_type ?? objectValue.content_type_name ?? "").toUpperCase() === "VIDEO";
+  for (const [key, child] of Object.entries(objectValue)) {
+    const lower = key.toLowerCase();
+    const nextVideoContext = objectIsVideo || (lower === "content_type" && String(child).toUpperCase() === "VIDEO");
+    if (nextVideoContext && /^(video_id|videoid|content_id)$/.test(lower) && child) ids.add(String(child));
+    collectVideoIds(child, ids, nextVideoContext);
+  }
+}
+
 /** Lấy live_room_id từ payload đã lưu để gọi analytics live. */
 async function liveRoomIds(
   supabase: ReturnType<typeof createAdminClient>,
@@ -125,6 +142,25 @@ async function liveRoomIds(
   if (error) throw error;
   const ids = new Set<string>();
   for (const row of data ?? []) collectLiveRoomIds(row.payload, ids);
+  return [...ids];
+}
+
+/** Lấy video_id thật từ order payloads để gọi Video Performances an toàn. */
+async function videoIds(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  window: SyncWindow,
+): Promise<string[]> {
+  const since = new Date(Date.parse(`${window.date}T00:00:00Z`) - 180 * 86400 * 1000).toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("tts_raw_records")
+    .select("payload")
+    .eq("connection_id", connectionId)
+    .eq("endpoint_key", "affiliate_orders")
+    .gte("snapshot_date", since);
+  if (error) throw error;
+  const ids = new Set<string>();
+  for (const row of data ?? []) collectVideoIds(row.payload, ids);
   return [...ids];
 }
 
@@ -503,7 +539,8 @@ export async function runSync(opts: SyncWindowOptions = {}) {
 
     const endpoints = prioritizeEndpoints((isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS)
       .filter((e) => e.enabled)
-      .filter((e) => e.key !== "partner_cap_orders" || (c.granted_scopes ?? []).includes(e.scope)));
+      .filter((e) => e.key !== "partner_cap_orders" || (c.granted_scopes ?? []).includes(e.scope))
+      .filter((e) => e.key !== "video_performances" || (c.granted_scopes ?? []).includes(e.scope)));
     const connErrors: string[] = [];
     for (const ep of endpoints) {
       if (Date.now() >= deadline) {
@@ -514,6 +551,8 @@ export async function runSync(opts: SyncWindowOptions = {}) {
         let ctxs: Ctx[] = [{}];
         if (ep.forEach === "live_room") {
           ctxs = (await liveRoomIds(supabase, c.id, window)).map((id) => ({ id }));
+        } else if (ep.forEach === "video") {
+          ctxs = (await videoIds(supabase, c.id, window)).map((id) => ({ id }));
         } else if (ep.forEach === "category_asset") {
           ctxs = affiliatePartnerAssets(await storedPayloads(supabase, c.id, "partner_category_assets"))
             .map((a) => a?.cipher)

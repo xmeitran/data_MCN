@@ -24,7 +24,7 @@ export type EndpointDef = {
    * Endpoint phụ thuộc: chạy 1 lần cho mỗi ID lấy từ dữ liệu đã đồng bộ
    * trước đó (vd: mỗi phiên LIVE lấy từ đơn affiliate).
    */
-  forEach?: "live_room" | "category_asset" | "campaign";
+  forEach?: "live_room" | "category_asset" | "campaign" | "video";
   /** Loại token dùng được: 1 = creator, 3 = partner (MCN/TAP). Mặc định 1 */
   userType?: 1 | 3;
   buildRequest: (ctx: {
@@ -89,6 +89,27 @@ export const ENDPOINTS: EndpointDef[] = [
     buildRequest: ({ pageToken, window }) => ({
       query: { page_size: PAGE, page_token: pageToken },
       body: { time_ge: window.startUnix, time_lt: window.endUnix, time_type: "PAY_TIME" },
+    }),
+  },
+
+  // Video performance theo tài liệu chính thức. Chỉ áp dụng cho creator US có
+  // scope creator.video.write và video_id thật lấy được từ order payload.
+  {
+    key: "video_performances",
+    scope: "creator.video.write",
+    enabled: true,
+    method: "GET",
+    path: "/analytics/202403/videos/performances",
+    listField: null,
+    snapshot: true,
+    paginated: false,
+    forEach: "video",
+    buildRequest: ({ id, window }) => ({
+      query: {
+        video_ids: id,
+        start_time_ge: window.startUnix,
+        end_time_le: window.endUnix,
+      },
     }),
   },
 

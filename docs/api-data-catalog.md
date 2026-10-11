@@ -14,6 +14,7 @@ but have zero rows because the account has no data or the scope is missing.
 |---|---|---|---|
 | `creator_profile` | `GET /affiliate_creator/202508/profiles` | `creator.affiliate.info` | creator profile, handle, region and profile attributes |
 | `affiliate_orders` | `POST /affiliate_creator/202410/orders/search` | `creator.affiliate_collaboration.read` | orders, products/SKUs, quantity, prices, commission, content type/id |
+| `video_performances` | `GET /analytics/202403/videos/performances` | `creator.video.write` | video e-commerce metrics when the creator is eligible and a real video ID is present |
 | `showcase_products` | `GET /affiliate_creator/202405/showcases/products` | `creator.showcase.read` | showcase products, shop, price and commission fields |
 | `sample_applications` | `POST /affiliate_creator/202412/sample_applications/search` | `creator.affiliate_collaboration.read` | sample/collaboration application status and product fields |
 | `live_core_stats` | `GET /analytics/202502/live_rooms/{live_room_id}/core_stats` | `creator.data.live.read.public` | live room core metrics |
@@ -31,13 +32,12 @@ but have zero rows because the account has no data or the scope is missing.
 
 ## Documented but not blindly enabled
 
-`GET /analytics/202403/videos/performances` (`video_performances`) is the API
-from the linked page. TikTok documents it as US-creator-only, requiring
-`creator.video.write`, with comma-separated `video_ids` (maximum 100 per
-request) and a one-day data delay. The current database does not yet have a
-reliable source of those video IDs, so the sync does not fabricate requests.
-Once a real video-id source and eligible creator token exist, add a dependent
-endpoint and the response will automatically be archived in `api_data`.
+`GET /analytics/202403/videos/performances` is enabled conditionally. TikTok
+documents it as US-creator-only, requiring `creator.video.write`, with
+comma-separated `video_ids` (maximum 100 per request) and a one-day data delay.
+The sync only derives IDs from real affiliate-order payloads and skips creators
+without the required scope; it never fabricates requests for ineligible
+accounts. Successful responses are archived in `api_data` automatically.
 
 ## Metric families currently observed
 
