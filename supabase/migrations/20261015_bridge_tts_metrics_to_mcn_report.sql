@@ -18,6 +18,7 @@ select
   max(metric_value) as maximum_value
 from public.mcn_metric_points
 where metric_value is not null
+  and metric_path !~* '(^|[.[])(id|url|uri|avatar|image|images|main_images|thumbnail|cover|logo|width|height|x|y|index|offset|limit|page_size)([.]|]|$)'
 group by creator_id, metric_date, endpoint_key, metric_key, metric_path
 
 union all
@@ -35,6 +36,7 @@ select
   max(metric_value)::numeric as maximum_value
 from public.tts_metric_points
 where metric_value is not null
+  and metric_key !~* '(^|[.[])(id|url|uri|avatar|image|images|main_images|thumbnail|cover|logo|width|height|x|y|index|offset|limit|page_size)([.]|]|$)'
 group by snapshot_date, endpoint_key, metric_key;
 
 revoke all on public.mcn_metric_daily_report from anon, authenticated;
