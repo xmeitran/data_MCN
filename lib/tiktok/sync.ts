@@ -2,6 +2,7 @@ import { callApi, refreshToken, TikTokApiError } from "./client";
 import { ENDPOINTS, PARTNER_ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isBusinessMetricPath } from "@/lib/metrics";
+import { deriveAffiliateOrderMetrics, parseTikTokNumber } from "./metric-utils";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
@@ -92,32 +93,65 @@ async function ensureFreshToken(
   return t.access_token;
 }
 
-/** Lấy live_room_id từ các payload affiliate gần đây để gọi analytics live. */
+function collectLiveRoomIds(value: unknown, ids: Set<string>, liveContext = false) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectLiveRoomIds(item, ids, liveContext);
+    return;
+  }
+  const objectValue = value as Record<string, unknown>;
+  const objectIsLive = liveContext || String(objectValue.content_type ?? objectValue.content_type_name ?? "").toUpperCase() === "LIVE";
+  for (const [key, child] of Object.entries(objectValue)) {
+    const lower = key.toLowerCase();
+    const nextLiveContext = objectIsLive || (lower === "content_type" && String(child).toUpperCase() === "LIVE");
+    if (nextLiveContext && /^(live_room_id|live_id|content_id)$/.test(lower) && child) ids.add(String(child));
+    collectLiveRoomIds(child, ids, nextLiveContext);
+  }
+}
+
+/** Lấy live_room_id từ payload đã lưu để gọi analytics live. */
 async function liveRoomIds(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
   window: SyncWindow,
 ): Promise<string[]> {
-  const since = new Date(Date.parse(`${window.date}T00:00:00Z`) - 7 * 86400 * 1000).toISOString().slice(0, 10);
+  const since = new Date(Date.parse(`${window.date}T00:00:00Z`) - 30 * 86400 * 1000).toISOString().slice(0, 10);
   const { data, error } = await supabase
     .from("tts_raw_records")
     .select("payload")
     .eq("connection_id", connectionId)
-    .eq("endpoint_key", "affiliate_orders")
+    .in("endpoint_key", ["affiliate_orders", "partner_cap_orders"])
     .gte("snapshot_date", since);
   if (error) throw error;
   const ids = new Set<string>();
-  for (const row of data ?? []) {
-    const o: any = row.payload;
-    for (const s of [o, ...(Array.isArray(o?.skus) ? o.skus : [])]) {
-      const isLive = String(s?.content_type ?? s?.content_type_name ?? "").toUpperCase() === "LIVE";
-      const id = s?.live_room_id ?? s?.live_id ?? (isLive ? s?.content_id : undefined);
-      if (id) {
-        ids.add(String(id));
-      }
-    }
-  }
+  for (const row of data ?? []) collectLiveRoomIds(row.payload, ids);
   return [...ids];
+}
+
+function prioritizeEndpoints<T extends { key: string }>(endpoints: T[]) {
+  const priority: Record<string, number> = {
+    creator_profile: 10,
+    affiliate_orders: 20,
+    live_core_stats: 30,
+    live_gmv_trend: 31,
+    live_view_trend: 32,
+    live_interactive_trend: 33,
+    live_traffic: 34,
+    live_product_stats: 35,
+    live_user_portraits: 36,
+    partner_category_assets: 10,
+    partner_cap_orders: 20,
+    partner_tap_orders: 21,
+    partner_campaigns: 40,
+    partner_campaign_products: 50,
+    partner_campaign_performance: 60,
+    showcase_products: 70,
+    sample_applications: 80,
+  };
+  return endpoints
+    .map((endpoint, index) => ({ endpoint, index }))
+    .sort((a, b) => (priority[a.endpoint.key] ?? 100) - (priority[b.endpoint.key] ?? 100) || a.index - b.index)
+    .map(({ endpoint }) => endpoint);
 }
 
 /** Đọc lại payload đã đồng bộ của 1 endpoint (dùng làm đầu vào cho endpoint phụ thuộc) */
@@ -229,8 +263,9 @@ function extractMetricPoints(value: unknown, path = "data", dimensions: Record<s
       return [];
     }
     const nextPath = path === "data" ? key : `${path}.${key}`;
-    if (typeof child === "string" && /^(?:-?\d+(?:\.\d+)?)$/.test(child) && /amount|value|rate|count|quantity|orders?|views?|gmv|nmv|commission|followers?|likes?|comments?|shares?|clicks?|duration|hours?|sold/i.test(key)) {
-      return isBusinessMetricPath(nextPath) ? [{ metric_key: nextPath, metric_value: Number(child), dimensions }] : [];
+    if (typeof child === "string" && /amount|value|rate|count|quantity|orders?|views?|gmv|nmv|commission|followers?|likes?|comments?|shares?|clicks?|duration|hours?|sold/i.test(key)) {
+      const parsed = parseTikTokNumber(child);
+      return parsed !== null && isBusinessMetricPath(nextPath) ? [{ metric_key: nextPath, metric_value: parsed, dimensions }] : [];
     }
     if (typeof child === "string" && (key === "name" || key === "title" || key === "type")) {
       return extractMetricPoints({}, nextPath, { ...dimensions, [key]: child });
@@ -245,8 +280,10 @@ async function persistMetricPoints(
   ep: EndpointDef,
   rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
 ) {
-  const points = rows.flatMap((row) =>
-    extractMetricPoints(row.payload).map((point) => ({
+  const points = rows.flatMap((row) => [
+    ...extractMetricPoints(row.payload),
+    ...(ep.key === "affiliate_orders" ? deriveAffiliateOrderMetrics(row.payload) : []),
+  ].map((point) => ({
       connection_id: connectionId,
       endpoint_key: ep.key,
       record_key: row.record_key,
@@ -255,8 +292,7 @@ async function persistMetricPoints(
       dimensions: point.dimensions,
       snapshot_date: row.snapshot_date,
       synced_at: new Date().toISOString(),
-    })),
-  );
+    })));
   if (!points.length) return;
   for (let i = 0; i < points.length; i += UPSERT_BATCH_SIZE) {
     const { error } = await supabase.from("tts_metric_points").upsert(points.slice(i, i + UPSERT_BATCH_SIZE), {
@@ -430,9 +466,9 @@ export async function runSync(opts: SyncWindowOptions = {}) {
       await supabase.from("tts_connections").update({ user_type: c.user_type }).eq("id", c.id);
     }
 
-    const endpoints = (isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS)
+    const endpoints = prioritizeEndpoints((isPartner(c) ? PARTNER_ENDPOINTS : ENDPOINTS)
       .filter((e) => e.enabled)
-      .filter((e) => e.key !== "partner_cap_orders" || (c.granted_scopes ?? []).includes(e.scope));
+      .filter((e) => e.key !== "partner_cap_orders" || (c.granted_scopes ?? []).includes(e.scope)));
     const connErrors: string[] = [];
     for (const ep of endpoints) {
       if (Date.now() >= deadline) {
