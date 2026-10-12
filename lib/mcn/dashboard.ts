@@ -132,6 +132,9 @@ export type MetricDefinition = {
   is_kpi: boolean;
 };
 
+export type ProductRecord = { id: number; product_id: string; snapshot_date: string; payload: Record<string, unknown> };
+export type LiveSessionRecord = { id: number; live_room_id: string; snapshot_date: string; payload: Record<string, unknown> };
+
 export type DashboardData = {
   creators: Creator[];
   profiles: CreatorProfile[];
@@ -143,6 +146,8 @@ export type DashboardData = {
   issues: Issue[];
   metricDaily: MetricDailyRow[];
   metricDefinitions: MetricDefinition[];
+  products: ProductRecord[];
+  liveSessions: LiveSessionRecord[];
   connections: { id: string; status: string; user_type: number | null; last_synced_at: string | null }[];
   syncRuns: { id: number; status: string; started_at: string; finished_at: string | null }[];
   warnings: string[];
@@ -197,13 +202,15 @@ export async function loadDashboardData(): Promise<DashboardData> {
       issues: [],
       metricDaily: [],
       metricDefinitions: [],
+      products: [],
+      liveSessions: [],
       connections: [],
       syncRuns: [],
       warnings,
     };
   }
 
-  const [creators, profiles, metricDaily, connections, syncRuns] = await Promise.all([
+  const [creators, profiles, metricDaily, connections, syncRuns, products, liveSessions] = await Promise.all([
     safeRows<Creator>(
       supabase
         .from("mcn_creators")
@@ -250,6 +257,16 @@ export async function loadDashboardData(): Promise<DashboardData> {
       "Sync history",
       warnings,
     ),
+    safeRows<ProductRecord>(
+      supabase.from("mcn_products").select("id, product_id, snapshot_date, payload").order("snapshot_date", { ascending: false }).limit(1000),
+      "Products",
+      warnings,
+    ),
+    safeRows<LiveSessionRecord>(
+      supabase.from("mcn_live_sessions").select("id, live_room_id, snapshot_date, payload").order("snapshot_date", { ascending: false }).limit(500),
+      "LIVE sessions",
+      warnings,
+    ),
   ]);
 
   return {
@@ -265,6 +282,8 @@ export async function loadDashboardData(): Promise<DashboardData> {
     metricDefinitions: [],
     connections,
     syncRuns,
+    products,
+    liveSessions,
     warnings,
   };
 }

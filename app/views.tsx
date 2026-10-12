@@ -2,7 +2,7 @@ import type { Creator, CreatorProfile, DashboardData } from "@/lib/mcn/dashboard
 import { Icon } from "./icons";
 import { metricDomain, metricLabel } from "@/lib/metrics";
 
-export type View = "overview" | "discover" | "brands" | "creators" | "deals" | "reports" | "operations" | "soon";
+export type View = "overview" | "discover" | "brands" | "creators" | "deals" | "reports" | "products" | "live" | "operations" | "soon";
 
 export type DashboardFilters = { from?: string; to?: string; creatorLevel?: string };
 
@@ -766,6 +766,39 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
         ) : <EmptyState title="Chưa có metric" detail="Chạy sync để nạp dữ liệu KPI." />}
       </section>
     </div>
+  </>;
+}
+
+function payloadValue(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (value !== undefined && value !== null && value !== "") return String(value);
+  }
+  return "—";
+}
+
+export function Products({ data, accessKey, filters }: ViewProps) {
+  return <>
+    <AnalyticsHeader view="products" accessKey={accessKey} filters={filters} />
+    <section className="card">
+      <CardHeader title="Creator showcase products" count={data.products.length} detail="Product JSON được tách riêng khỏi KPI Creator; shop/seller chỉ là metadata của sản phẩm." />
+      {data.products.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Product ID</th><th>Product</th><th>Shop</th><th>Category</th><th>Ngày snapshot</th></tr></thead><tbody>
+        {data.products.map((product) => <tr key={product.id}><td className="mono">{product.product_id}</td><td><strong>{payloadValue(product.payload, ["name", "title", "product_name"])}</strong></td><td>{payloadValue(product.payload, ["shop_name", "shop"])} </td><td>{payloadValue(product.payload, ["category_name", "category"])}</td><td>{fmtDate(product.snapshot_date)}</td></tr>)}
+      </tbody></table></div> : <EmptyState title="Chưa có Product data" detail="Chạy sync với scope creator.showcase.read để lấy showcase của creator." />}
+    </section>
+  </>;
+}
+
+export function Live({ data, accessKey, filters }: ViewProps) {
+  const liveMetrics = data.metricDaily.filter((row) => row.endpoint_key.startsWith("live_"));
+  return <>
+    <AnalyticsHeader view="live" accessKey={accessKey} filters={filters} />
+    <div className="kpi-grid"><Kpi label="Completed LIVE sessions" hint="Các phiên live đã lấy performance" value={fmtNumber(data.liveSessions.length)} caption="LIVE sessions" /><Kpi label="LIVE metrics" hint="Metric đã chuẩn hóa từ Live Analytics API" value={fmtNumber(liveMetrics.length)} caption="Metric points" /></div>
+    <section className="card"><CardHeader title="Completed LIVE sessions" count={data.liveSessions.length} detail="Mỗi session được liên kết với live_room_id và toàn bộ metric endpoint tương ứng." />
+      {data.liveSessions.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Live room</th><th>Ngày</th><th>Metrics</th><th>GMV / Orders / Views</th></tr></thead><tbody>
+        {data.liveSessions.map((session) => { const rows = liveMetrics.filter((row) => row.metric_date === session.snapshot_date); return <tr key={session.id}><td className="mono">{session.live_room_id}</td><td>{fmtDate(session.snapshot_date)}</td><td>{fmtNumber(rows.length)}</td><td>{rows.slice(0, 3).map((row) => `${metricLabel(row.metric_key)}: ${fmtNumber(row.total_value, 2)}`).join(" · ") || "—"}</td></tr>; })}
+      </tbody></table></div> : <EmptyState title="Chưa có phiên LIVE" detail="LIVE performance được lấy khi order payload có content_type = LIVE và có live_room_id." />}
+    </section>
   </>;
 }
 

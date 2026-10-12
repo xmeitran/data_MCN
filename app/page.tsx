@@ -1,7 +1,7 @@
 import { loadDashboardData, type DashboardData } from "@/lib/mcn/dashboard";
 import { Icon, type IconName } from "./icons";
 import { SyncButton } from "./sync-button";
-import { Brands, Creators, Deals, Discover, Operations, Overview, Reports, Soon, fmtDate, latestProfiles, queryFor, type DashboardFilters, type View, type ViewProps } from "./views";
+import { Brands, Creators, Deals, Discover, Live, Operations, Overview, Products, Reports, Soon, fmtDate, latestProfiles, queryFor, type DashboardFilters, type View, type ViewProps } from "./views";
 
 export const dynamic = "force-dynamic";
 
@@ -18,10 +18,10 @@ const navEntries: (NavLeaf | NavGroup)[] = [
     children: [
       { label: "Metrics & Reports", view: "reports" },
       { label: "Brands", view: "brands" },
-      { label: "Products", view: "soon" },
+      { label: "Products", view: "products" },
       { label: "Creators", view: "discover" },
       { label: "Trending Videos", view: "soon" },
-      { label: "LIVE", view: "soon" },
+      { label: "LIVE", view: "live" },
     ],
   },
   { label: "Automations", icon: "send", children: [{ label: "Tasks & SLA", view: "operations" }] },
@@ -202,6 +202,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
           {view === "creators" && <Creators {...props} />}
           {view === "deals" && <Deals {...props} />}
           {view === "reports" && <Reports {...props} />}
+          {view === "products" && <Products {...props} />}
+          {view === "live" && <Live {...props} />}
           {view === "operations" && <Operations {...props} />}
           {view === "soon" && <Soon module={active.leaf.label} accessKey={accessKey} filters={filters} />}
         </main>
