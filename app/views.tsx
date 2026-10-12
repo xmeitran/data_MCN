@@ -811,12 +811,12 @@ function ApiDocCard({ doc }: { doc: ApiDoc }) {
       <div className="api-doc-card-header">
         <div>
           <div className="api-doc-title-row"><h2>{copy.vi}</h2><span className="status-tag success">Có data</span></div>
-          <p className="api-doc-en">{copy.en}</p>
+          <p className="api-doc-en">{doc.doc_title_en || copy.en}</p>
         </div>
         <span className="chip">{fmtNumber(doc.response_count)} responses</span>
       </div>
       <div className="api-doc-route"><span className="method">{doc.method}</span><code>{doc.path}</code></div>
-      <p className="api-doc-description">{copy.description}</p>
+      <p className="api-doc-description">{copy.description}{doc.doc_url ? <> <a href={doc.doc_url} target="_blank" rel="noreferrer">Xem tài liệu TikTok ↗</a></> : null}</p>
       <div className="api-doc-meta">
         <span><b>Ngày có data:</b> {doc.dates.slice(0, 5).join(", ") || "—"}</span>
         <span><b>Output:</b> JSON response từ TikTok</span>
@@ -831,7 +831,15 @@ function ApiDocCard({ doc }: { doc: ApiDoc }) {
             </table>
           </div>
         ) : <p className="muted">Response có data nhưng chưa tách được field scalar.</p>}
+        {doc.documented_fields.length ? <p className="api-doc-schema-note">Schema docs: {fmtNumber(doc.documented_fields.length)} field response được TikTok mô tả.</p> : null}
       </div>
+      {doc.documented_fields.length ? <details className="api-doc-schema">
+        <summary>Xem schema response từ tài liệu TikTok</summary>
+        <div className="table-scroll"><table className="data-table api-values-table">
+          <thead><tr><th>Field</th><th>Type</th><th>Sample trong docs</th></tr></thead>
+          <tbody>{doc.documented_fields.slice(0, 40).map((field) => <tr key={`${field.field}-${field.type}`}><td className="mono">{field.field}</td><td>{field.type || "—"}</td><td>{field.sample || "—"}</td></tr>)}</tbody>
+        </table></div>
+      </details> : null}
       <details className="api-doc-output">
         <summary>Xem output JSON mẫu</summary>
         <pre>{jsonPreview(doc.sample_output)}</pre>

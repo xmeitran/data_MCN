@@ -1,5 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { canonicalMetricKey, isBusinessMetricPath, isCreatorPerformanceEndpoint } from "@/lib/metrics";
+import { ENDPOINTS, PARTNER_ENDPOINTS } from "@/lib/tiktok/endpoints";
+import tiktokApiCatalog from "@/data/tiktok-api-catalog.json";
 
 export type Creator = {
   id: string;
@@ -145,6 +147,11 @@ export type ApiDoc = {
   fields: string[];
   values: Array<{ field: string; samples: string[] }>;
   sample_output: unknown;
+  doc_title_en: string | null;
+  doc_url: string | null;
+  description_en: string | null;
+  documented_fields: Array<{ field: string; type: string; sample: string }>;
+  documented_output: unknown;
 };
 
 export type DashboardData = {
@@ -184,6 +191,25 @@ function scalarText(value: unknown) {
   return JSON.stringify(value);
 }
 
+type ApiCatalogEntry = (typeof tiktokApiCatalog.apis)[number];
+
+const endpointDefinitions = new Map([...ENDPOINTS, ...PARTNER_ENDPOINTS].map((endpoint) => [endpoint.key, endpoint]));
+const catalogByPath = new Map(tiktokApiCatalog.apis.filter((entry) => entry.api_path).map((entry) => [`${entry.method}:${entry.api_path}`, entry]));
+
+function catalogEntryFor(endpointKey: string, method: string, runtimePath: string): ApiCatalogEntry | undefined {
+  const definitionPath = endpointDefinitions.get(endpointKey)?.path;
+  const exact = [definitionPath, runtimePath]
+    .filter(Boolean)
+    .map((path) => catalogByPath.get(`${method}:${path}`))
+    .find(Boolean);
+  if (exact) return exact;
+  if (runtimePath.includes("/live_rooms/")) {
+    const normalized = runtimePath.replace(/\/live_rooms\/[^/]+\//, "/live_rooms/{live_room_id}/");
+    return catalogByPath.get(`${method}:${normalized}`);
+  }
+  return undefined;
+}
+
 function summarizeApiDocs(rows: Array<{ endpoint_key: string; method: string; path: string; snapshot_date: string; fetched_at: string; response_data: unknown }>): ApiDoc[] {
   const grouped = new Map<string, ApiDoc & { valueMap: Map<string, Set<string>> }>();
   const visit = (value: unknown, path: string, fieldSet: Set<string>, valueMap: Map<string, Set<string>>, depth = 0) => {
@@ -207,6 +233,7 @@ function summarizeApiDocs(rows: Array<{ endpoint_key: string; method: string; pa
 
   for (const row of rows) {
     const response = row.response_data && typeof row.response_data === "object" ? row.response_data : {};
+    const catalogEntry = catalogEntryFor(row.endpoint_key, row.method, row.path);
     const current = grouped.get(row.endpoint_key) ?? {
       endpoint_key: row.endpoint_key,
       method: row.method,
@@ -218,6 +245,11 @@ function summarizeApiDocs(rows: Array<{ endpoint_key: string; method: string; pa
       fields: [],
       values: [],
       sample_output: response,
+      doc_title_en: catalogEntry?.title ?? null,
+      doc_url: catalogEntry?.url ?? null,
+      description_en: catalogEntry?.description_en ?? null,
+      documented_fields: catalogEntry?.response_fields ?? [],
+      documented_output: catalogEntry?.response_sample ?? null,
       valueMap: new Map<string, Set<string>>(),
     };
     current.response_count += 1;
