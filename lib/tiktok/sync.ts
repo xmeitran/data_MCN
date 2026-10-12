@@ -126,6 +126,65 @@ function collectVideoIds(value: unknown, ids: Set<string>, videoContext = false)
   }
 }
 
+type CreatorIdentity = {
+  openId: string;
+  username?: string;
+  displayName?: string;
+  avatarUrl?: string;
+};
+
+const CREATOR_ID_KEYS = new Set([
+  "creator_id", "creator_open_id", "creator_user_id", "affiliate_creator_id", "affiliate_open_id",
+]);
+const CREATOR_CONTEXT_KEYS = new Set(["creator", "affiliate_creator", "affiliate_creator_info", "author"]);
+
+function textValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Extract creator identity from CAP/order responses without treating shop/seller as a creator. */
+function findCreatorIdentity(value: unknown, context = ""): CreatorIdentity | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findCreatorIdentity(item, context);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  const object = value as Record<string, unknown>;
+  const normalized = Object.fromEntries(Object.entries(object).map(([key, child]) => [key.toLowerCase(), child]));
+  const explicitId = Object.entries(normalized).find(([key, child]) => CREATOR_ID_KEYS.has(key) && textValue(child));
+  const contextualId = context && CREATOR_CONTEXT_KEYS.has(context)
+    ? ["open_id", "user_id", "id"].map((key) => textValue(normalized[key])).find(Boolean)
+    : undefined;
+  const openId = textValue(explicitId?.[1]) ?? contextualId;
+  if (openId) {
+    return {
+      openId,
+      username: textValue(normalized.username) ?? textValue(normalized.handle) ?? textValue(normalized.unique_id),
+      displayName: textValue(normalized.display_name) ?? textValue(normalized.nickname) ?? textValue(normalized.name),
+      avatarUrl: textValue(normalized.avatar_url) ?? textValue(normalized.avatar),
+    };
+  }
+
+  for (const [key, child] of Object.entries(object)) {
+    const lower = key.toLowerCase();
+    if (CREATOR_CONTEXT_KEYS.has(lower)) {
+      const found = findCreatorIdentity(child, lower);
+      if (found) return found;
+    }
+  }
+  for (const [key, child] of Object.entries(object)) {
+    const lower = key.toLowerCase();
+    if (["shop", "seller", "product", "skus", "sku", "buyer", "customer"].includes(lower)) continue;
+    const found = findCreatorIdentity(child, context);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** Lấy live_room_id từ payload đã lưu để gọi analytics live. */
 async function liveRoomIds(
   supabase: ReturnType<typeof createAdminClient>,
@@ -219,13 +278,43 @@ type Ctx = { id?: string; cipher?: string };
 async function ensureCreator(
   supabase: ReturnType<typeof createAdminClient>,
   connection: Pick<Connection, "id" | "open_id">,
+  identity?: CreatorIdentity,
 ) {
+  const openId = identity?.openId ?? connection.open_id;
   const { data, error } = await supabase
     .from("mcn_creators")
     .upsert(
-      { connection_id: connection.id, open_id: connection.open_id, updated_at: new Date().toISOString() },
-      { onConflict: "connection_id" },
+      {
+        connection_id: connection.id,
+        open_id: openId,
+        username: identity?.username ?? null,
+        display_name: identity?.displayName ?? null,
+        avatar_url: identity?.avatarUrl ?? null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "connection_id,open_id" },
     )
+    .select("id")
+    .single();
+  if (error && error.code !== "42P01") throw error;
+  return data?.id ?? null;
+}
+
+async function ensurePayloadCreator(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  identity: CreatorIdentity,
+) {
+  const { data, error } = await supabase
+    .from("mcn_creators")
+    .upsert({
+      connection_id: connectionId,
+      open_id: identity.openId,
+      username: identity.username ?? null,
+      display_name: identity.displayName ?? null,
+      avatar_url: identity.avatarUrl ?? null,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "connection_id,open_id" })
     .select("id")
     .single();
   if (error && error.code !== "42P01") throw error;
@@ -377,8 +466,25 @@ async function persistMetricPoints(
   ].map((point) => ({ ...point, row })));
   if (!points.length) return;
 
-  const creator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).maybeSingle();
+  const creator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).order("created_at", { ascending: true }).limit(1).maybeSingle();
   if (creator.error && creator.error.code !== "42P01") throw creator.error;
+
+  const creatorIdByRecord = new Map<string, string | null>();
+  const payloadCreatorCache = new Map<string, string | null>();
+  for (const row of rows) {
+    const identity = findCreatorIdentity(row.payload);
+    if (!identity) {
+      creatorIdByRecord.set(row.record_key, creator.data?.id ?? null);
+      continue;
+    }
+    let creatorId = payloadCreatorCache.get(identity.openId);
+    if (creatorId === undefined) {
+      const resolvedCreatorId = await ensurePayloadCreator(supabase, connectionId, identity);
+      creatorId = resolvedCreatorId;
+      payloadCreatorCache.set(identity.openId, resolvedCreatorId);
+    }
+    creatorIdByRecord.set(row.record_key, creatorId ?? null);
+  }
 
   if (ep.forEach === "live_room" && ctx.id) {
     const liveRows = points.map((point) => ({
@@ -404,7 +510,7 @@ async function persistMetricPoints(
   if (!isCreatorPerformanceEndpoint(ep.key)) return;
   for (let i = 0; i < points.length; i += UPSERT_BATCH_SIZE) {
     const creatorRows = points.slice(i, i + UPSERT_BATCH_SIZE).map((point) => ({
-      creator_id: creator.data?.id ?? null,
+      creator_id: creatorIdByRecord.get(point.row.record_key) ?? creator.data?.id ?? null,
       connection_id: connectionId,
       endpoint_key: ep.key,
       record_key: point.row.record_key,
@@ -423,6 +529,38 @@ async function persistMetricPoints(
   }
 }
 
+const PROFILE_NUMERIC_FIELDS = [
+  "followers", "avg_views", "engagement_rate", "gmv", "nmv", "orders", "live_hours",
+  "live_views", "video_views", "live_gmv", "video_gmv", "gmv_per_live_hour", "gmv_per_video",
+  "live_aov", "video_aov", "ctr", "ctor", "video_count", "product_clicks", "product_orders",
+] as const;
+
+function scalarLeaves(value: unknown, output: Record<string, unknown> = {}) {
+  if (!value || typeof value !== "object") return output;
+  if (Array.isArray(value)) {
+    for (const item of value) scalarLeaves(item, output);
+    return output;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (child && typeof child === "object") scalarLeaves(child, output);
+    else output[key.toLowerCase().replace(/[^a-z0-9]/g, "")] = child;
+  }
+  return output;
+}
+
+function normalizeCreatorProfile(payload: unknown) {
+  const leaves = scalarLeaves(payload);
+  const values: Record<string, number | null> = {};
+  for (const field of PROFILE_NUMERIC_FIELDS) {
+    const compact = field.replaceAll("_", "");
+    const exact = leaves[compact];
+    const parsed = parseTikTokNumber(exact);
+    values[field] = parsed;
+  }
+  const category = leaves.topcategory ?? leaves.category ?? leaves.categoryname;
+  return { ...values, top_category: textValue(category) ?? null };
+}
+
 async function persistDomainRows(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
@@ -431,13 +569,26 @@ async function persistDomainRows(
   ctx: Ctx = {},
 ) {
   if (ep.key === "showcase_products") {
-    const products = rows.map((row) => ({
+    const defaultCreator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).order("created_at", { ascending: true }).limit(1).maybeSingle();
+    if (defaultCreator.error && defaultCreator.error.code !== "42P01") throw defaultCreator.error;
+    const payloadCreatorCache = new Map<string, string | null>();
+    const products = [] as Record<string, unknown>[];
+    for (const row of rows) {
+      const identity = findCreatorIdentity(row.payload);
+      let creatorId = defaultCreator.data?.id ?? null;
+      if (identity) {
+        creatorId = payloadCreatorCache.get(identity.openId) ?? await ensurePayloadCreator(supabase, connectionId, identity);
+        payloadCreatorCache.set(identity.openId, creatorId);
+      }
+      products.push({
       connection_id: connectionId,
+      creator_id: creatorId,
       product_id: row.record_key,
       snapshot_date: row.snapshot_date,
       payload: row.payload ?? {},
       synced_at: new Date().toISOString(),
-    }));
+      });
+    }
     const { error } = await supabase.from("mcn_products").upsert(products, {
       onConflict: "connection_id,product_id,snapshot_date",
     });
@@ -457,14 +608,16 @@ async function persistDomainRows(
   }
 
   if (ep.key === "creator_profile") {
-    const creator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).maybeSingle();
+    const creator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).order("created_at", { ascending: true }).limit(1).maybeSingle();
     if (creator.error && creator.error.code !== "42P01") throw creator.error;
     if (creator.data?.id && rows[0]) {
+      const profile = normalizeCreatorProfile(rows[0].payload);
       const { error } = await supabase.from("mcn_creator_profiles").upsert({
         creator_id: creator.data.id,
         connection_id: connectionId,
         snapshot_date: rows[0].snapshot_date,
         payload: rows[0].payload ?? {},
+        ...profile,
         synced_at: new Date().toISOString(),
       }, { onConflict: "creator_id,snapshot_date" });
       if (error && error.code !== "42P01") throw error;

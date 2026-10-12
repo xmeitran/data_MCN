@@ -9,6 +9,7 @@ const BUSINESS_LEAF = /(?:gmv|nmv|revenue|income|order|quantity|sold|commission|
 export const CREATOR_PERFORMANCE_ENDPOINTS = new Set([
   "creator_profile",
   "affiliate_orders",
+  "partner_cap_orders",
   "video_performances",
   "live_core_stats",
   "live_gmv_trend",

@@ -772,18 +772,27 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
 function payloadValue(payload: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = payload[key];
-    if (value !== undefined && value !== null && value !== "") return String(value);
+    if (value !== undefined && value !== null && value !== "") {
+      if (typeof value === "object") {
+        const object = value as Record<string, unknown>;
+        const nested = object.name ?? object.title ?? object.label ?? object.value;
+        if (nested !== undefined && nested !== null && typeof nested !== "object") return String(nested);
+        continue;
+      }
+      return String(value);
+    }
   }
   return "—";
 }
 
 export function Products({ data, accessKey, filters }: ViewProps) {
+  const creators = new Map(data.creators.map((creator) => [creator.id, creator]));
   return <>
     <AnalyticsHeader view="products" accessKey={accessKey} filters={filters} />
     <section className="card">
-      <CardHeader title="Creator showcase products" count={data.products.length} detail="Product JSON được tách riêng khỏi KPI Creator; shop/seller chỉ là metadata của sản phẩm." />
-      {data.products.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Product ID</th><th>Product</th><th>Shop</th><th>Category</th><th>Ngày snapshot</th></tr></thead><tbody>
-        {data.products.map((product) => <tr key={product.id}><td className="mono">{product.product_id}</td><td><strong>{payloadValue(product.payload, ["name", "title", "product_name"])}</strong></td><td>{payloadValue(product.payload, ["shop_name", "shop"])} </td><td>{payloadValue(product.payload, ["category_name", "category"])}</td><td>{fmtDate(product.snapshot_date)}</td></tr>)}
+      <CardHeader title="Creator showcase products" count={data.products.length} detail="Hiển thị sản phẩm creator đã đưa vào showcase; shop chỉ là metadata phụ." />
+      {data.products.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Product ID</th><th>Product</th><th>Creator</th><th>Shop</th><th>Category</th><th>Ngày snapshot</th></tr></thead><tbody>
+        {data.products.map((product) => <tr key={product.id}><td className="mono">{product.product_id}</td><td><strong>{payloadValue(product.payload, ["name", "title", "product_name", "product"])}</strong></td><td>{creatorName(creators.get(product.creator_id ?? ""))}</td><td>{payloadValue(product.payload, ["shop_name", "shop"])} </td><td>{payloadValue(product.payload, ["category_name", "category"])}</td><td>{fmtDate(product.snapshot_date)}</td></tr>)}
       </tbody></table></div> : <EmptyState title="Chưa có Product data" detail="Chạy sync với scope creator.showcase.read để lấy showcase của creator." />}
     </section>
   </>;

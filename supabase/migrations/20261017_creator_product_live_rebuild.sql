@@ -40,7 +40,7 @@ create table public.tts_sync_checkpoints (
 
 create table public.mcn_creators (
   id uuid primary key default gen_random_uuid(),
-  connection_id uuid not null unique references public.tts_connections(id) on delete cascade,
+  connection_id uuid not null references public.tts_connections(id) on delete cascade,
   open_id text not null,
   username text,
   display_name text,
@@ -58,6 +58,8 @@ create table public.mcn_creators (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create unique index mcn_creators_connection_open_id_idx on public.mcn_creators(connection_id, open_id);
 
 create table public.mcn_creator_profiles (
   id bigserial primary key,
@@ -109,6 +111,7 @@ create table public.mcn_creator_metrics (
 create table public.mcn_products (
   id bigserial primary key,
   connection_id uuid not null references public.tts_connections(id) on delete cascade,
+  creator_id uuid references public.mcn_creators(id) on delete set null,
   product_id text not null,
   snapshot_date date not null,
   payload jsonb not null default '{}'::jsonb,
@@ -144,6 +147,7 @@ create table public.mcn_live_metrics (
 
 create index mcn_creator_metrics_date_idx on public.mcn_creator_metrics(snapshot_date desc, endpoint_key, metric_key);
 create index mcn_products_date_idx on public.mcn_products(snapshot_date desc, product_id);
+create index mcn_products_creator_idx on public.mcn_products(creator_id, snapshot_date desc);
 create index mcn_live_metrics_date_idx on public.mcn_live_metrics(snapshot_date desc, endpoint_key, metric_key);
 
 -- Compatibility shape for the existing dashboard: only creator and LIVE

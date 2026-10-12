@@ -132,7 +132,7 @@ export type MetricDefinition = {
   is_kpi: boolean;
 };
 
-export type ProductRecord = { id: number; product_id: string; snapshot_date: string; payload: Record<string, unknown> };
+export type ProductRecord = { id: number; product_id: string; creator_id: string | null; snapshot_date: string; payload: Record<string, unknown> };
 export type LiveSessionRecord = { id: number; live_room_id: string; snapshot_date: string; payload: Record<string, unknown> };
 
 export type DashboardData = {
@@ -258,7 +258,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
       warnings,
     ),
     safeRows<ProductRecord>(
-      supabase.from("mcn_products").select("id, product_id, snapshot_date, payload").order("snapshot_date", { ascending: false }).limit(1000),
+      supabase.from("mcn_products").select("id, product_id, creator_id, snapshot_date, payload").order("snapshot_date", { ascending: false }).limit(1000),
       "Products",
       warnings,
     ),
