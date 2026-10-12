@@ -1,4 +1,4 @@
-import { callApi, refreshToken, TikTokApiError } from "./client";
+import { callApi, callApiWithMeta, refreshToken, TikTokApiError } from "./client";
 import { ENDPOINTS, PARTNER_ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isCreatorPerformanceEndpoint } from "@/lib/metrics";
@@ -338,9 +338,14 @@ async function persistApiData(
   page: number,
   pageToken: string | undefined,
   req: { path?: string; query?: Record<string, string | number | undefined>; body?: unknown },
-  responseData: unknown,
+  response: {
+    data: unknown;
+    envelope: { code?: number | string; message?: string; request_id?: string };
+    httpStatus: number;
+  },
+  parser: { status: string; reason?: string | null; details?: Record<string, unknown> } = { status: "pending" },
 ) {
-  const { error } = await supabase.from("api_data").upsert(
+  const { data, error } = await supabase.from("api_data").upsert(
     {
       connection_id: connectionId,
       endpoint_key: ep.key,
@@ -351,8 +356,17 @@ async function persistApiData(
       page_token: pageToken ?? null,
       request_query: req.query ?? {},
       request_body: req.body ?? {},
-      response_data: responseData ?? {},
-      response_code: 0,
+      response_data: response.data ?? {},
+      response_envelope: response.envelope ?? {},
+      response_code: Number(response.envelope.code ?? 0) || 0,
+      http_status: response.httpStatus,
+      tiktok_code: response.envelope.code ?? 0,
+      tiktok_message: response.envelope.message ?? null,
+      tiktok_request_id: response.envelope.request_id ?? null,
+      record_count: recordsForEndpoint(ep, response.data).length,
+      parser_status: parser.status,
+      parser_reason: parser.reason ?? null,
+      parser_details: parser.details ?? {},
       snapshot_date: snapshotDate,
       fetched_at: new Date().toISOString(),
     },
@@ -361,6 +375,7 @@ async function persistApiData(
   // Code can be deployed before the migration; the existing normalized sync
   // must remain usable during that rollout.
   if (error && error.code !== "42P01") throw error;
+  return (data as Array<{ id?: number }> | null)?.[0]?.id ?? null;
 }
 
 async function checkpointIsComplete(
@@ -421,7 +436,7 @@ async function persistMetricPoints(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
   ep: EndpointDef,
-  rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
+  rows: Array<{ record_key: string; payload: unknown; snapshot_date: string; source_api_data_id?: number | null }>,
   ctx: Ctx = {},
 ) {
   const points = rows.flatMap((row) => [
@@ -461,6 +476,7 @@ async function persistMetricPoints(
       dimensions: point.dimensions,
       snapshot_date: point.row.snapshot_date,
       raw_payload: point.row.payload ?? {},
+      source_api_data_id: point.row.source_api_data_id ?? null,
       synced_at: new Date().toISOString(),
     }));
     const { error } = await supabase.from("mcn_live_metrics").upsert(liveRows, {
@@ -483,6 +499,7 @@ async function persistMetricPoints(
       dimensions: point.dimensions,
       snapshot_date: point.row.snapshot_date,
       raw_payload: point.row.payload ?? {},
+      source_api_data_id: point.row.source_api_data_id ?? null,
       synced_at: new Date().toISOString(),
     }));
     const { error } = await supabase.from("mcn_creator_metrics").upsert(creatorRows, {
@@ -528,7 +545,7 @@ async function persistDomainRows(
   supabase: ReturnType<typeof createAdminClient>,
   connectionId: string,
   ep: EndpointDef,
-  rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
+  rows: Array<{ record_key: string; payload: unknown; snapshot_date: string; source_api_data_id?: number | null }>,
   ctx: Ctx = {},
 ) {
   if (ep.key === "showcase_products") {
@@ -549,6 +566,7 @@ async function persistDomainRows(
       product_id: row.record_key,
       snapshot_date: row.snapshot_date,
       payload: row.payload ?? {},
+      source_api_data_id: row.source_api_data_id ?? null,
       synced_at: new Date().toISOString(),
       });
     }
@@ -565,6 +583,7 @@ async function persistDomainRows(
       live_room_id: ctx.id,
       snapshot_date: session?.snapshot_date,
       payload: session?.payload ?? {},
+      source_api_data_id: session?.source_api_data_id ?? null,
       synced_at: new Date().toISOString(),
     }, { onConflict: "connection_id,live_room_id,snapshot_date" });
     if (error && error.code !== "42P01") throw error;
@@ -581,6 +600,7 @@ async function persistDomainRows(
         snapshot_date: rows[0].snapshot_date,
         payload: rows[0].payload ?? {},
         ...profile,
+        source_api_data_id: rows[0].source_api_data_id ?? null,
         synced_at: new Date().toISOString(),
       }, { onConflict: "creator_id,snapshot_date" });
       if (error && error.code !== "42P01") throw error;
@@ -614,17 +634,35 @@ async function syncEndpoint(
   for (let page = 0; page < MAX_PAGES; page++) {
     if (Date.now() >= deadline) throw new SyncBudgetExceeded();
     const req = ep.buildRequest({ pageToken, window, id, cipher });
-    const data: any = await callApi({
+    const result = await callApiWithMeta<any>({
       method: ep.method,
       path: req.path ?? ep.path,
       accessToken,
       query: req.query,
       body: req.body,
     });
-    await persistApiData(supabase, connectionId, ep, ctx, window.date, page, pageToken, req, data);
+    const data = result.data;
 
-    // Nếu tên field danh sách khác tài liệu, tự lấy mảng đầu tiên trong `data`
     const items = recordsForEndpoint(ep, data);
+    const parserStatus = ep.listField !== null && !items.length
+      ? "empty"
+      : "parsed";
+    const sourceApiDataId = await persistApiData(
+      supabase,
+      connectionId,
+      ep,
+      ctx,
+      window.date,
+      page,
+      pageToken,
+      req,
+      result,
+      {
+        status: parserStatus,
+        reason: parserStatus === "empty" ? `Không có bản ghi tại field ${ep.listField}` : null,
+        details: { list_field: ep.listField, parser_version: "v2" },
+      },
+    );
     const now = new Date().toISOString();
     // TikTok đôi khi lặp một record trong cùng response/page. Raw response
     // vẫn được lưu đầy đủ ở api_data để audit, nhưng domain tables chỉ nên
@@ -642,6 +680,7 @@ async function syncEndpoint(
         payload: cipher && item && typeof item === "object" ? { ...item, _cipher: cipher } : item,
         snapshot_date: window.date,
         synced_at: now,
+        source_api_data_id: sourceApiDataId,
       };
     }).filter((row) => {
       if (seenRecordKeys.has(row.record_key)) return false;

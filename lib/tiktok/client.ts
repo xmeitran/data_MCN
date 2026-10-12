@@ -32,6 +32,13 @@ export class TikTokApiError extends Error {
   }
 }
 
+export type TikTokApiEnvelope<T = unknown> = {
+  code: number | string;
+  message?: string;
+  request_id?: string;
+  data?: T;
+};
+
 async function authRequest(path: string, params: Record<string, string>): Promise<TokenData> {
   const url = new URL(AUTH_BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -79,6 +86,18 @@ export async function callApi<T = any>(opts: {
   query?: Record<string, string | number | undefined>;
   body?: unknown;
 }): Promise<T> {
+  const result = await callApiWithMeta<T>(opts);
+  return result.data as T;
+}
+
+/** Same request as callApi, but keeps the TikTok envelope for audit storage. */
+export async function callApiWithMeta<T = any>(opts: {
+  method: "GET" | "POST";
+  path: string;
+  accessToken: string;
+  query?: Record<string, string | number | undefined>;
+  body?: unknown;
+}): Promise<{ data: T; envelope: TikTokApiEnvelope<T>; httpStatus: number }> {
   const params: Record<string, string> = {
     app_key: appKey(),
     timestamp: String(Math.floor(Date.now() / 1000)),
@@ -119,11 +138,11 @@ export async function callApi<T = any>(opts: {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       continue;
     }
-    const json = await res.json().catch(() => ({}));
+    const json = await res.json().catch(() => ({})) as TikTokApiEnvelope<T>;
     // HTTP 200 vẫn có thể lỗi nghiệp vụ -> luôn kiểm tra code
     if (!res.ok || json.code !== 0) {
       throw new TikTokApiError(opts.path, json.code ?? res.status, json.message ?? "api error");
     }
-    return json.data as T;
+    return { data: json.data as T, envelope: json, httpStatus: res.status };
   }
 }
