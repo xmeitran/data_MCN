@@ -1,6 +1,29 @@
 const TECHNICAL_SEGMENTS = /(?:^|[.[])(?:id|url|uri|avatar|image|images|main_images|thumbnail|cover|logo|width|height|x|y|index|offset|limit|page_size)(?:$|[.\]])/i;
 const BUSINESS_LEAF = /(?:gmv|nmv|revenue|income|order|quantity|sold|commission|rate|view|viewer|follower|like|comment|share|click|ctr|ctor|cvr|conversion|duration|hour|gpm|aov|price|amount|refund|return|sample|acceptance|cost)/i;
 
+/**
+ * Endpoints that describe creator performance. Product/showcase payloads are
+ * intentionally excluded: they may contain seller/shop and product numbers,
+ * but those are inventory metadata rather than creator KPIs.
+ */
+export const CREATOR_PERFORMANCE_ENDPOINTS = new Set([
+  "creator_profile",
+  "affiliate_orders",
+  "video_performances",
+  "live_core_stats",
+  "live_gmv_trend",
+  "live_view_trend",
+  "live_interactive_trend",
+  "live_traffic",
+  "live_product_stats",
+  "live_user_portraits",
+  "sample_applications",
+]);
+
+export function isCreatorPerformanceEndpoint(endpointKey: string) {
+  return CREATOR_PERFORMANCE_ENDPOINTS.has(endpointKey);
+}
+
 const ALIASES: Array<[RegExp, string]> = [
   [/live.*gmv|gmv.*live/, "live_gmv"],
   [/video.*gmv|gmv.*video/, "video_gmv"],

@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { canonicalMetricKey, isBusinessMetricPath } from "@/lib/metrics";
+import { canonicalMetricKey, isBusinessMetricPath, isCreatorPerformanceEndpoint } from "@/lib/metrics";
 
 export type Creator = {
   id: string;
@@ -162,6 +162,7 @@ async function safeRows<T>(query: PromiseLike<QueryResult<T>>, label: string, wa
 function normalizeMetricRows(rows: MetricDailyRow[]) {
   const grouped = new Map<string, MetricDailyRow>();
   for (const row of rows) {
+    if (!isCreatorPerformanceEndpoint(row.endpoint_key)) continue;
     if (!isBusinessMetricPath(row.metric_path)) continue;
     const metricKey = canonicalMetricKey(row.metric_path);
     const key = [row.creator_id ?? "", row.metric_date ?? "", row.endpoint_key, metricKey].join("|");

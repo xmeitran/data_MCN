@@ -1,7 +1,7 @@
 import { callApi, refreshToken, TikTokApiError } from "./client";
 import { ENDPOINTS, PARTNER_ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isBusinessMetricPath } from "@/lib/metrics";
+import { isBusinessMetricPath, isCreatorPerformanceEndpoint } from "@/lib/metrics";
 import { deriveAffiliateOrderMetrics, parseTikTokNumber } from "./metric-utils";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
@@ -350,6 +350,10 @@ async function persistMetricPoints(
   ep: EndpointDef,
   rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
 ) {
+  // Keep showcase/product JSON in tts_raw_records for audit and creator
+  // catalogue views, but do not flatten shop/product fields into creator KPI
+  // points. Those values are not creator performance metrics.
+  if (!isCreatorPerformanceEndpoint(ep.key)) return;
   const points = rows.flatMap((row) => [
     ...extractMetricPoints(row.payload),
     ...(ep.key === "affiliate_orders" ? deriveAffiliateOrderMetrics(row.payload) : []),
