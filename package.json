@@ -6,6 +6,7 @@
     "build": "next build",
     "start": "next start -p ${PORT:-3005}",
     "test:metric": "node --experimental-strip-types scripts/test-metric-utils.mjs",
+    "test:normalizers": "node --experimental-strip-types scripts/test-normalizers.mjs",
     "scrape:api-docs": "node scripts/scrape-tiktok-api-docs.mjs"
   },
   "dependencies": {

@@ -1,8 +1,9 @@
 import { callApi, refreshToken, TikTokApiError } from "./client";
 import { ENDPOINTS, PARTNER_ENDPOINTS, EndpointDef, SyncWindow } from "./endpoints";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { isBusinessMetricPath, isCreatorPerformanceEndpoint } from "@/lib/metrics";
-import { deriveAffiliateOrderMetrics, parseTikTokNumber } from "./metric-utils";
+import { isCreatorPerformanceEndpoint } from "@/lib/metrics";
+import { parseTikTokNumber } from "./metric-utils";
+import { businessMetricsForEndpoint, recordsForEndpoint } from "./normalizers";
 
 const MAX_PAGES = 200; // chặn vòng lặp vô hạn nếu API trả token lặp
 const REFRESH_BEFORE_MS = 24 * 3600 * 1000;
@@ -409,48 +410,11 @@ async function saveCheckpoint(
   if (error && error.code !== "42P01") throw error;
 }
 
-type MetricPoint = {
-  metric_key: string;
-  metric_value: number;
-  dimensions: Record<string, string>;
-};
-
 class SyncBudgetExceeded extends Error {
   constructor() {
     super("sync budget reached; next cron run will continue from checkpoints");
     this.name = "SyncBudgetExceeded";
   }
-}
-
-/** Tách mọi số đo trong response nhưng bỏ qua id/thời gian/mã kỹ thuật. */
-function extractMetricPoints(value: unknown, path = "data", dimensions: Record<string, string> = {}): MetricPoint[] {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return isBusinessMetricPath(path) ? [{ metric_key: path, metric_value: value, dimensions }] : [];
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) => extractMetricPoints(item, `${path}[${index}]`, dimensions));
-  }
-  if (!value || typeof value !== "object") return [];
-
-  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => {
-    const lower = key.toLowerCase();
-    if (
-      lower === "id" || lower.endsWith("_id") || lower.includes("timestamp") ||
-      lower.includes("unix") || lower.endsWith("_at") || lower.endsWith("_time") ||
-      lower === "code" || lower === "page_size"
-    ) {
-      return [];
-    }
-    const nextPath = path === "data" ? key : `${path}.${key}`;
-    if (typeof child === "string" && /amount|value|rate|count|quantity|orders?|views?|gmv|nmv|commission|followers?|likes?|comments?|shares?|clicks?|duration|hours?|sold/i.test(key)) {
-      const parsed = parseTikTokNumber(child);
-      return parsed !== null && isBusinessMetricPath(nextPath) ? [{ metric_key: nextPath, metric_value: parsed, dimensions }] : [];
-    }
-    if (typeof child === "string" && (key === "name" || key === "title" || key === "type")) {
-      return extractMetricPoints({}, nextPath, { ...dimensions, [key]: child });
-    }
-    return extractMetricPoints(child, nextPath, dimensions);
-  });
 }
 
 async function persistMetricPoints(
@@ -461,8 +425,7 @@ async function persistMetricPoints(
   ctx: Ctx = {},
 ) {
   const points = rows.flatMap((row) => [
-    ...extractMetricPoints(row.payload),
-    ...(ep.key === "affiliate_orders" ? deriveAffiliateOrderMetrics(row.payload) : []),
+    ...businessMetricsForEndpoint(ep.key, row.payload),
   ].map((point) => ({ ...point, row })));
   if (!points.length) return;
 
@@ -661,12 +624,7 @@ async function syncEndpoint(
     await persistApiData(supabase, connectionId, ep, ctx, window.date, page, pageToken, req, data);
 
     // Nếu tên field danh sách khác tài liệu, tự lấy mảng đầu tiên trong `data`
-    const items: any[] =
-      ep.listField === null
-        ? [data]
-        : (data?.[ep.listField] ??
-          (Object.values(data ?? {}).find((v) => Array.isArray(v)) as any[] | undefined) ??
-          []);
+    const items = recordsForEndpoint(ep, data);
     const now = new Date().toISOString();
     // TikTok đôi khi lặp một record trong cùng response/page. Raw response
     // vẫn được lưu đầy đủ ở api_data để audit, nhưng domain tables chỉ nên
@@ -676,7 +634,7 @@ async function syncEndpoint(
       const baseId =
         ep.listField === null
           ? id ?? "self"
-          : String(ep.idOf?.(item) ?? `${id ? id + ":" : ""}${page}-${i}`);
+          : String(ep.idOf?.(item as any) ?? `${id ? id + ":" : ""}${page}-${i}`);
       return {
         connection_id: connectionId,
         endpoint_key: ep.key,
