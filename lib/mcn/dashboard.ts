@@ -203,7 +203,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
     };
   }
 
-  const [creators, profiles, brands, campaigns, deals, bookings, tasks, issues, metricDaily, metricDefinitions, connections, syncRuns] = await Promise.all([
+  const [creators, profiles, metricDaily, connections, syncRuns] = await Promise.all([
     safeRows<Creator>(
       supabase
         .from("mcn_creators")
@@ -220,56 +220,6 @@ export async function loadDashboardData(): Promise<DashboardData> {
         .order("snapshot_date", { ascending: false })
         .limit(1000),
       "Creator performance",
-      warnings,
-    ),
-    safeRows<Brand>(
-      supabase.from("mcn_brands").select("id, name, status, contact_name").order("name").limit(500),
-      "Brands",
-      warnings,
-    ),
-    safeRows<Campaign>(
-      supabase
-        .from("mcn_campaigns")
-        .select("id, brand_id, name, campaign_type, status, owner_name, starts_at, ends_at, target_gmv, target_orders")
-        .order("starts_at", { ascending: false })
-        .limit(200),
-      "Campaigns",
-      warnings,
-    ),
-    safeRows<Deal>(
-      supabase
-        .from("mcn_deals")
-        .select("id, creator_id, campaign_id, deal_type, status, agreed_fee, commission_rate, exclusive_deal, due_at")
-        .order("due_at", { ascending: true, nullsFirst: false })
-        .limit(300),
-      "Deals",
-      warnings,
-    ),
-    safeRows<Booking>(
-      supabase
-        .from("mcn_bookings")
-        .select("id, creator_id, campaign_id, channel, status, scheduled_start, expected_gmv, actual_gmv")
-        .order("scheduled_start", { ascending: true, nullsFirst: false })
-        .limit(300),
-      "Bookings",
-      warnings,
-    ),
-    safeRows<Task>(
-      supabase
-        .from("mcn_tasks")
-        .select("id, title, task_type, status, priority, owner_name, due_at, sla_due_at, creator_id, campaign_id")
-        .order("due_at", { ascending: true, nullsFirst: false })
-        .limit(300),
-      "Operations tasks",
-      warnings,
-    ),
-    safeRows<Issue>(
-      supabase
-        .from("mcn_issues")
-        .select("id, title, category, severity, status, owner_name, opened_at, creator_id")
-        .order("opened_at", { ascending: false })
-        .limit(300),
-      "Issues",
       warnings,
     ),
     safeRows<MetricDailyRow>(
@@ -290,16 +240,6 @@ export async function loadDashboardData(): Promise<DashboardData> {
       "Metric warehouse",
       warnings,
     ),
-    safeRows<MetricDefinition>(
-      supabase
-        .from("mcn_metric_definitions")
-        .select("metric_key, display_name, domain, unit, source_endpoint, description, is_kpi")
-        .order("domain")
-        .order("display_name")
-        .limit(500),
-      "Metric definitions",
-      warnings,
-    ),
     safeRows<{ id: string; status: string; user_type: number | null; last_synced_at: string | null }>(
       supabase.from("tts_connections").select("id, status, user_type, last_synced_at").limit(500),
       "TikTok connections",
@@ -312,5 +252,19 @@ export async function loadDashboardData(): Promise<DashboardData> {
     ),
   ]);
 
-  return { creators, profiles, brands, campaigns, deals, bookings, tasks, issues, metricDaily: normalizeMetricRows(metricDaily), metricDefinitions, connections, syncRuns, warnings };
+  return {
+    creators,
+    profiles,
+    brands: [],
+    campaigns: [],
+    deals: [],
+    bookings: [],
+    tasks: [],
+    issues: [],
+    metricDaily: normalizeMetricRows(metricDaily),
+    metricDefinitions: [],
+    connections,
+    syncRuns,
+    warnings,
+  };
 }

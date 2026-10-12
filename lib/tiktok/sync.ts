@@ -134,14 +134,14 @@ async function liveRoomIds(
 ): Promise<string[]> {
   const since = new Date(Date.parse(`${window.date}T00:00:00Z`) - 30 * 86400 * 1000).toISOString().slice(0, 10);
   const { data, error } = await supabase
-    .from("tts_raw_records")
-    .select("payload")
+    .from("api_data")
+    .select("response_data")
     .eq("connection_id", connectionId)
     .in("endpoint_key", ["affiliate_orders", "partner_cap_orders"])
     .gte("snapshot_date", since);
   if (error) throw error;
   const ids = new Set<string>();
-  for (const row of data ?? []) collectLiveRoomIds(row.payload, ids);
+  for (const row of data ?? []) collectLiveRoomIds(row.response_data, ids);
   return [...ids];
 }
 
@@ -153,14 +153,14 @@ async function videoIds(
 ): Promise<string[]> {
   const since = new Date(Date.parse(`${window.date}T00:00:00Z`) - 180 * 86400 * 1000).toISOString().slice(0, 10);
   const { data, error } = await supabase
-    .from("tts_raw_records")
-    .select("payload")
+    .from("api_data")
+    .select("response_data")
     .eq("connection_id", connectionId)
     .eq("endpoint_key", "affiliate_orders")
     .gte("snapshot_date", since);
   if (error) throw error;
   const ids = new Set<string>();
-  for (const row of data ?? []) collectVideoIds(row.payload, ids);
+  for (const row of data ?? []) collectVideoIds(row.response_data, ids);
   return [...ids];
 }
 
@@ -197,12 +197,16 @@ async function storedPayloads(
   endpointKey: string,
 ): Promise<any[]> {
   const { data, error } = await supabase
-    .from("tts_raw_records")
-    .select("payload")
+    .from("api_data")
+    .select("response_data")
     .eq("connection_id", connectionId)
     .eq("endpoint_key", endpointKey);
   if (error) throw error;
-  return (data ?? []).map((r) => r.payload);
+  return (data ?? []).flatMap((r: any) => {
+    const response = r.response_data ?? {};
+    const list = Object.values(response).find((value) => Array.isArray(value));
+    return Array.isArray(list) ? list : [response];
+  });
 }
 
 /** Token partner (MCN/TAP) = user_type 3, hoặc có scope bắt đầu bằng "partner." */
@@ -211,6 +215,22 @@ export function isPartner(c: Pick<Connection, "user_type" | "granted_scopes">) {
 }
 
 type Ctx = { id?: string; cipher?: string };
+
+async function ensureCreator(
+  supabase: ReturnType<typeof createAdminClient>,
+  connection: Pick<Connection, "id" | "open_id">,
+) {
+  const { data, error } = await supabase
+    .from("mcn_creators")
+    .upsert(
+      { connection_id: connection.id, open_id: connection.open_id, updated_at: new Date().toISOString() },
+      { onConflict: "connection_id" },
+    )
+    .select("id")
+    .single();
+  if (error && error.code !== "42P01") throw error;
+  return data?.id ?? null;
+}
 
 function checkpointKey(ctx: Ctx) {
   if (ctx.id && ctx.cipher) return `${ctx.id}:${ctx.cipher}`;
@@ -349,31 +369,106 @@ async function persistMetricPoints(
   connectionId: string,
   ep: EndpointDef,
   rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
+  ctx: Ctx = {},
 ) {
-  // Keep showcase/product JSON in tts_raw_records for audit and creator
-  // catalogue views, but do not flatten shop/product fields into creator KPI
-  // points. Those values are not creator performance metrics.
-  if (!isCreatorPerformanceEndpoint(ep.key)) return;
   const points = rows.flatMap((row) => [
     ...extractMetricPoints(row.payload),
     ...(ep.key === "affiliate_orders" ? deriveAffiliateOrderMetrics(row.payload) : []),
-  ].map((point) => ({
+  ].map((point) => ({ ...point, row })));
+  if (!points.length) return;
+
+  const creator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).maybeSingle();
+  if (creator.error && creator.error.code !== "42P01") throw creator.error;
+
+  if (ep.forEach === "live_room" && ctx.id) {
+    const liveRows = points.map((point) => ({
       connection_id: connectionId,
+      live_room_id: ctx.id,
       endpoint_key: ep.key,
-      record_key: row.record_key,
+      record_key: point.row.record_key,
       metric_key: point.metric_key,
+      metric_path: point.metric_key,
       metric_value: point.metric_value,
       dimensions: point.dimensions,
-      snapshot_date: row.snapshot_date,
+      snapshot_date: point.row.snapshot_date,
+      raw_payload: point.row.payload ?? {},
       synced_at: new Date().toISOString(),
-    })));
-  if (!points.length) return;
-  for (let i = 0; i < points.length; i += UPSERT_BATCH_SIZE) {
-    const { error } = await supabase.from("tts_metric_points").upsert(points.slice(i, i + UPSERT_BATCH_SIZE), {
-      onConflict: "connection_id,endpoint_key,record_key,metric_key",
+    }));
+    const { error } = await supabase.from("mcn_live_metrics").upsert(liveRows, {
+      onConflict: "connection_id,live_room_id,endpoint_key,record_key,metric_path",
     });
-    // Cho phép deploy code trước migration; raw records vẫn phải sync bình thường.
     if (error && error.code !== "42P01") throw error;
+    return;
+  }
+
+  if (!isCreatorPerformanceEndpoint(ep.key)) return;
+  for (let i = 0; i < points.length; i += UPSERT_BATCH_SIZE) {
+    const creatorRows = points.slice(i, i + UPSERT_BATCH_SIZE).map((point) => ({
+      creator_id: creator.data?.id ?? null,
+      connection_id: connectionId,
+      endpoint_key: ep.key,
+      record_key: point.row.record_key,
+      metric_key: point.metric_key,
+      metric_path: point.metric_key,
+      metric_value: point.metric_value,
+      dimensions: point.dimensions,
+      snapshot_date: point.row.snapshot_date,
+      raw_payload: point.row.payload ?? {},
+      synced_at: new Date().toISOString(),
+    }));
+    const { error } = await supabase.from("mcn_creator_metrics").upsert(creatorRows, {
+      onConflict: "connection_id,endpoint_key,record_key,metric_path",
+    });
+    if (error && error.code !== "42P01") throw error;
+  }
+}
+
+async function persistDomainRows(
+  supabase: ReturnType<typeof createAdminClient>,
+  connectionId: string,
+  ep: EndpointDef,
+  rows: Array<{ record_key: string; payload: unknown; snapshot_date: string }>,
+  ctx: Ctx = {},
+) {
+  if (ep.key === "showcase_products") {
+    const products = rows.map((row) => ({
+      connection_id: connectionId,
+      product_id: row.record_key,
+      snapshot_date: row.snapshot_date,
+      payload: row.payload ?? {},
+      synced_at: new Date().toISOString(),
+    }));
+    const { error } = await supabase.from("mcn_products").upsert(products, {
+      onConflict: "connection_id,product_id,snapshot_date",
+    });
+    if (error && error.code !== "42P01") throw error;
+  }
+
+  if (ep.forEach === "live_room" && ctx.id) {
+    const session = rows[0];
+    const { error } = await supabase.from("mcn_live_sessions").upsert({
+      connection_id: connectionId,
+      live_room_id: ctx.id,
+      snapshot_date: session?.snapshot_date,
+      payload: session?.payload ?? {},
+      synced_at: new Date().toISOString(),
+    }, { onConflict: "connection_id,live_room_id,snapshot_date" });
+    if (error && error.code !== "42P01") throw error;
+  }
+
+  if (ep.key === "creator_profile") {
+    const creator = await supabase.from("mcn_creators").select("id").eq("connection_id", connectionId).maybeSingle();
+    if (creator.error && creator.error.code !== "42P01") throw creator.error;
+    if (creator.data?.id && rows[0]) {
+      const { error } = await supabase.from("mcn_creator_profiles").upsert({
+        creator_id: creator.data.id,
+        connection_id: connectionId,
+        snapshot_date: rows[0].snapshot_date,
+        payload: rows[0].payload ?? {},
+        synced_at: new Date().toISOString(),
+      }, { onConflict: "creator_id,snapshot_date" });
+      if (error && error.code !== "42P01") throw error;
+    }
   }
 }
 
@@ -435,13 +530,8 @@ async function syncEndpoint(
       };
     });
 
-    for (let i = 0; i < rows.length; i += UPSERT_BATCH_SIZE) {
-      const { error } = await supabase
-        .from("tts_raw_records")
-        .upsert(rows.slice(i, i + UPSERT_BATCH_SIZE), { onConflict: "connection_id,endpoint_key,record_key" });
-      if (error) throw error;
-    }
-    await persistMetricPoints(supabase, connectionId, ep, rows);
+    await persistDomainRows(supabase, connectionId, ep, rows, ctx);
+    await persistMetricPoints(supabase, connectionId, ep, rows, ctx);
     total += rows.length;
 
     pageToken = data?.next_page_token || undefined;
@@ -545,6 +635,7 @@ export async function runSync(opts: SyncWindowOptions = {}) {
       .filter((e) => e.enabled)
       .filter((e) => e.key !== "partner_cap_orders" || (c.granted_scopes ?? []).includes(e.scope))
       .filter((e) => e.key !== "video_performances" || (c.granted_scopes ?? []).includes(e.scope)));
+    if (!isPartner(c)) await ensureCreator(supabase, c);
     const connErrors: string[] = [];
     for (const ep of endpoints) {
       if (Date.now() >= deadline) {
