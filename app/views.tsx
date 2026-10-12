@@ -800,26 +800,54 @@ function jsonPreview(value: unknown) {
   }
 }
 
+type ApiBusinessGroup = "Creator" | "Product" | "LIVE" | "Partner";
+
+function apiBusinessGroup(endpointKey: string): ApiBusinessGroup {
+  if (endpointKey.startsWith("live_")) return "LIVE";
+  if (endpointKey.includes("product") || endpointKey === "showcase_products") return "Product";
+  if (endpointKey.startsWith("partner_")) return "Partner";
+  return "Creator";
+}
+
+function apiBusinessOutput(endpointKey: string) {
+  const outputs: Record<string, string> = {
+    creator_profile: "Thông tin Creator, hồ sơ kênh và chỉ số tổng quan.",
+    affiliate_orders: "Đơn hàng, sản phẩm, doanh thu và hoa hồng gắn với Creator.",
+    video_performances: "Lượt xem, video, GMV, đơn hàng và hiệu suất nội dung.",
+    showcase_products: "Danh sách sản phẩm Creator đang giới thiệu trong showcase.",
+    sample_applications: "Yêu cầu nhận mẫu và trạng thái hợp tác với Creator.",
+    live_core_stats: "GMV, đơn hàng, người xem và thời lượng của phiên LIVE.",
+    live_gmv_trend: "Diễn biến doanh thu theo từng khoảng thời gian trong LIVE.",
+    live_view_trend: "Diễn biến lượt xem và người xem trong LIVE.",
+    live_interactive_trend: "Tương tác của người xem trong LIVE.",
+    live_traffic: "Nguồn traffic đưa người xem vào LIVE.",
+    live_product_stats: "Hiệu suất sản phẩm được giới thiệu trong LIVE.",
+    live_user_portraits: "Thông tin tổng hợp về nhóm người xem LIVE.",
+  };
+  return outputs[endpointKey] || "Dữ liệu response thực tế từ TikTok Partner API.";
+}
+
 function ApiDocCard({ doc }: { doc: ApiDoc }) {
   const copy = apiDocCopy[doc.endpoint_key] ?? {
     en: endpointLabels[doc.endpoint_key] || doc.endpoint_key,
     vi: endpointLabels[doc.endpoint_key] || doc.endpoint_key,
     description: "API đã trả về dữ liệu và được ghi nhận trong kho dữ liệu TikTok.",
   };
+  const group = apiBusinessGroup(doc.endpoint_key);
   return (
     <article className="api-doc-card">
       <div className="api-doc-card-header">
         <div>
-          <div className="api-doc-title-row"><h2>{copy.vi}</h2><span className="status-tag success">Có data</span></div>
+          <div className="api-doc-title-row"><span className={`api-doc-group ${group.toLowerCase()}`}>{group}</span><h2>{copy.vi}</h2><span className="status-tag success">Đã lấy được data</span></div>
           <p className="api-doc-en">{doc.doc_title_en || copy.en}</p>
         </div>
-        <span className="chip">{fmtNumber(doc.response_count)} responses</span>
+        <span className="chip">{fmtNumber(doc.response_count)} lần ghi nhận</span>
       </div>
-      <div className="api-doc-route"><span className="method">{doc.method}</span><code>{doc.path}</code></div>
-      <p className="api-doc-description">{copy.description}{doc.doc_url ? <> <a href={doc.doc_url} target="_blank" rel="noreferrer">Xem tài liệu TikTok ↗</a></> : null}</p>
+      <p className="api-doc-description"><b>API này dùng để:</b> {copy.description}</p>
+      <div className="api-doc-business-output"><b>Dữ liệu dùng được:</b> {apiBusinessOutput(doc.endpoint_key)}</div>
       <div className="api-doc-meta">
-        <span><b>Ngày có data:</b> {doc.dates.slice(0, 5).join(", ") || "—"}</span>
-        <span><b>Output:</b> JSON response từ TikTok</span>
+        <span><b>Ngày lấy:</b> {doc.dates.slice(0, 5).join(", ") || "—"}</span>
+        <span><b>Field có dữ liệu:</b> {fmtNumber(doc.values.length)}</span>
       </div>
       <div className="api-doc-values">
         <div className="api-doc-section-title">Field và value đã nhận được</div>
@@ -840,6 +868,11 @@ function ApiDocCard({ doc }: { doc: ApiDoc }) {
           <tbody>{doc.documented_fields.slice(0, 40).map((field) => <tr key={`${field.field}-${field.type}`}><td className="mono">{field.field}</td><td>{field.type || "—"}</td><td>{field.sample || "—"}</td></tr>)}</tbody>
         </table></div>
       </details> : null}
+      <details className="api-doc-technical">
+        <summary>Xem thông tin kỹ thuật</summary>
+        <div className="api-doc-route"><span className="method">{doc.method}</span><code>{doc.path}</code></div>
+        {doc.doc_url ? <p className="api-doc-doc-link"><a href={doc.doc_url} target="_blank" rel="noreferrer">Mở tài liệu API TikTok gốc ↗</a></p> : null}
+      </details>
       <details className="api-doc-output">
         <summary>Xem output JSON mẫu</summary>
         <pre>{jsonPreview(doc.sample_output)}</pre>
@@ -849,17 +882,19 @@ function ApiDocCard({ doc }: { doc: ApiDoc }) {
 }
 
 export function ApiDocs({ data }: ViewProps) {
+  const grouped = (["Creator", "Product", "LIVE", "Partner"] as ApiBusinessGroup[]).map((group) => ({ group, docs: data.apiDocs.filter((doc) => apiBusinessGroup(doc.endpoint_key) === group) })).filter((item) => item.docs.length);
   return <>
     <section className="card api-docs-intro">
       <CardHeader
-        title="TikTok API Documentation"
+        title="Dữ liệu TikTok đang dùng"
         count={data.apiDocs.length}
-        detail="Chỉ hiển thị các API đã được gọi và thực sự trả về dữ liệu trong api_data."
+        detail="Danh sách dưới đây chỉ gồm API đã gọi thành công và có dữ liệu thực tế."
       />
-      <div className="api-docs-note"><Icon name="info" size={16} /><span>Đây là tài liệu runtime của workspace: endpoint, output và value được đọc từ response thật, không phải danh sách API lý thuyết.</span></div>
+      <div className="api-docs-note"><Icon name="info" size={16} /><span><b>Cách đọc:</b> “Dữ liệu dùng được” là ý nghĩa nghiệp vụ; field, path và JSON chỉ nằm trong phần mở rộng dành cho người kỹ thuật.</span></div>
+      <div className="api-doc-summary-grid">{grouped.map(({ group, docs }) => <div className="api-doc-summary" key={group}><span>{group}</span><strong>{docs.length}</strong><small>API có data</small></div>)}</div>
     </section>
     {data.apiDocs.length ? (
-      <div className="api-doc-list">{data.apiDocs.map((doc) => <ApiDocCard doc={doc} key={doc.endpoint_key} />)}</div>
+      <div className="api-doc-list">{grouped.map(({ group, docs }) => <section key={group} className="api-doc-group-section"><div className="api-doc-group-heading"><h2>{group}</h2><span>{docs.length} API có dữ liệu</span></div>{docs.map((doc) => <ApiDocCard doc={doc} key={doc.endpoint_key} />)}</section>)}</div>
     ) : <section className="card"><EmptyState title="Chưa có API trả data" detail="Chạy sync TikTok thành công để hệ thống ghi nhận API và tạo tài liệu runtime." /></section>}
   </>;
 }
