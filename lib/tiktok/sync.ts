@@ -668,6 +668,10 @@ async function syncEndpoint(
           (Object.values(data ?? {}).find((v) => Array.isArray(v)) as any[] | undefined) ??
           []);
     const now = new Date().toISOString();
+    // TikTok đôi khi lặp một record trong cùng response/page. Raw response
+    // vẫn được lưu đầy đủ ở api_data để audit, nhưng domain tables chỉ nên
+    // nhận một record cho mỗi business key.
+    const seenRecordKeys = new Set<string>();
     const rows = items.map((item, i) => {
       const baseId =
         ep.listField === null
@@ -681,6 +685,10 @@ async function syncEndpoint(
         snapshot_date: window.date,
         synced_at: now,
       };
+    }).filter((row) => {
+      if (seenRecordKeys.has(row.record_key)) return false;
+      seenRecordKeys.add(row.record_key);
+      return true;
     });
 
     await persistDomainRows(supabase, connectionId, ep, rows, ctx);
