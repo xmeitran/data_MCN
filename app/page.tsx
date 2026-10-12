@@ -17,22 +17,12 @@ const navEntries: (NavLeaf | NavGroup)[] = [
     icon: "intel",
     children: [
       { label: "Metrics & Reports", view: "reports" },
-      { label: "Brands", view: "brands" },
       { label: "Products", view: "products" },
       { label: "Creators", view: "discover" },
-      { label: "Trending Videos", view: "soon" },
       { label: "LIVE", view: "live" },
     ],
   },
-  { label: "Automations", icon: "send", children: [{ label: "Tasks & SLA", view: "operations" }] },
-  { label: "CRM", icon: "users", children: [{ label: "Creator CRM", view: "creators" }, { label: "Campaigns & Deals", view: "deals" }] },
-  { label: "Content", icon: "content", view: "soon" },
-  { label: "Creator Community", icon: "community", view: "soon" },
-  { label: "GMV Max", icon: "dollar", view: "soon" },
-  { label: "Meta", icon: "meta", view: "soon", badge: "NEW" },
-  { label: "P&L Calculator", icon: "calculator", view: "soon" },
-  { label: "Creator Messages", icon: "message", view: "soon" },
-  { label: "TikTok Partner API", icon: "code", view: "soon" },
+  { label: "CRM", icon: "users", children: [{ label: "Creator CRM", view: "creators" }] },
 ];
 
 const leaves = navEntries.flatMap((entry) => "children" in entry ? entry.children.map((leaf) => ({ leaf, group: entry.label as string | undefined })) : entry.hash ? [] : [{ leaf: entry, group: undefined }]);
