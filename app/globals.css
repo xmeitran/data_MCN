@@ -163,6 +163,28 @@ small { font-size: 12px; }
 .data-table tbody tr:hover { background: #fafbfc; }
 .data-table td strong { color: var(--ink); font-weight: 600; }
 .data-table td small { display: block; margin-top: 2px; color: var(--muted); font-weight: 400; }
+
+/* Runtime API documentation */
+.api-doc-list { display: grid; gap: 12px; }
+.api-doc-card { overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.api-doc-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px; }
+.api-doc-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.api-doc-title-row h2 { color: var(--ink); font-size: 17px; }
+.api-doc-en { margin-top: 2px; color: var(--muted); font-size: 13px; }
+.api-doc-route { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #f8fafc; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.api-doc-route code { overflow-x: auto; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: nowrap; }
+.method { padding: 2px 7px; color: #166534; background: var(--success-soft); border: 1px solid #bbf7d0; border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 700; }
+.api-doc-description { padding: 12px 16px 0; color: var(--text); }
+.api-doc-meta { display: flex; flex-wrap: wrap; gap: 18px; padding: 10px 16px 14px; color: var(--muted); font-size: 12px; }
+.api-doc-meta b { color: var(--text); font-weight: 600; }
+.api-doc-values { border-top: 1px solid var(--line); }
+.api-doc-section-title { padding: 12px 16px 8px; color: var(--ink); font-size: 13px; font-weight: 600; }
+.api-values-table { min-width: 620px; }
+.api-values-table td { padding-top: 9px; padding-bottom: 9px; }
+.api-doc-output { margin: 0 16px 16px; border: 1px solid var(--line); border-radius: 8px; }
+.api-doc-output summary { padding: 9px 12px; color: var(--primary); cursor: pointer; font-size: 13px; font-weight: 600; }
+.api-doc-output pre { max-height: 280px; margin: 0; padding: 12px; overflow: auto; color: var(--text); background: #f8fafc; border-top: 1px solid var(--line); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.api-docs-note { display: flex; align-items: flex-start; gap: 8px; margin: 0 16px 16px; padding: 10px 12px; color: var(--muted); background: var(--primary-soft); border: 1px solid #c7d2fe; border-radius: 8px; font-size: 13px; }
 .rank { color: var(--ink); font-weight: 700; }
 .money { color: var(--success); font-weight: 600; }
 .person { display: flex; align-items: center; gap: 12px; min-width: 180px; }

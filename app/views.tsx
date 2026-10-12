@@ -1,8 +1,8 @@
-import type { Creator, CreatorProfile, DashboardData } from "@/lib/mcn/dashboard";
+import type { ApiDoc, Creator, CreatorProfile, DashboardData } from "@/lib/mcn/dashboard";
 import { Icon } from "./icons";
 import { metricDomain, metricLabel } from "@/lib/metrics";
 
-export type View = "overview" | "discover" | "brands" | "creators" | "deals" | "reports" | "products" | "live" | "operations" | "soon";
+export type View = "overview" | "discover" | "brands" | "creators" | "deals" | "reports" | "api-docs" | "products" | "live" | "operations" | "soon";
 
 export type DashboardFilters = { from?: string; to?: string; creatorLevel?: string };
 
@@ -28,6 +28,29 @@ const endpointLabels: Record<string, string> = {
   partner_campaign_performance: "Campaign performance",
   showcase_products: "Showcase products",
   sample_applications: "Sample applications",
+  partner_category_assets: "Partner category assets",
+  partner_cap_orders: "Partner CAP orders",
+  partner_campaign_products: "Campaign products",
+};
+
+const apiDocCopy: Record<string, { en: string; vi: string; description: string }> = {
+  creator_profile: { en: "Creator Profile", vi: "Hồ sơ Creator", description: "Thông tin hồ sơ và các chỉ số tổng quan của Creator affiliate." },
+  affiliate_orders: { en: "Affiliate Orders", vi: "Đơn hàng Affiliate", description: "Đơn hàng phát sinh từ hoạt động affiliate, hoa hồng, sản phẩm và nội dung tạo doanh thu." },
+  video_performances: { en: "Video Performances", vi: "Hiệu suất Video", description: "Hiệu suất của từng video như lượt xem, doanh thu, đơn hàng và tương tác." },
+  showcase_products: { en: "Showcase Products", vi: "Sản phẩm Showcase", description: "Danh sách sản phẩm Creator đang gắn trong showcase, bao gồm shop, giá và thông tin sản phẩm." },
+  sample_applications: { en: "Sample Applications", vi: "Yêu cầu nhận mẫu", description: "Các yêu cầu nhận sản phẩm mẫu và trạng thái xử lý hợp tác với Creator." },
+  live_core_stats: { en: "LIVE Core Statistics", vi: "Chỉ số cốt lõi phiên LIVE", description: "Chỉ số tổng quan của một phiên LIVE đã hoàn tất." },
+  live_gmv_trend: { en: "LIVE GMV Trend", vi: "Xu hướng GMV LIVE", description: "Diễn biến GMV theo thời gian trong phiên LIVE." },
+  live_view_trend: { en: "LIVE View Trend", vi: "Xu hướng lượt xem LIVE", description: "Diễn biến lượt xem và người xem theo thời gian trong phiên LIVE." },
+  live_interactive_trend: { en: "LIVE Interaction Trend", vi: "Xu hướng tương tác LIVE", description: "Diễn biến tương tác của người xem trong phiên LIVE." },
+  live_traffic: { en: "LIVE Traffic", vi: "Nguồn traffic LIVE", description: "Nguồn truy cập và phân bổ traffic dẫn vào phiên LIVE." },
+  live_product_stats: { en: "LIVE Product Statistics", vi: "Chỉ số sản phẩm LIVE", description: "Hiệu suất các sản phẩm được giới thiệu hoặc bán trong phiên LIVE." },
+  live_user_portraits: { en: "LIVE User Portraits", vi: "Chân dung người xem LIVE", description: "Thông tin tổng hợp về nhóm người xem của phiên LIVE." },
+  partner_category_assets: { en: "Authorized Category Assets", vi: "Category asset được cấp quyền", description: "Danh sách category asset được Partner cấp quyền để gọi các API Partner khác." },
+  partner_cap_orders: { en: "Partner CAP Orders", vi: "Đơn hàng CAP của Partner", description: "Đơn hàng affiliate của các Creator thuộc mạng lưới MCN/Partner." },
+  partner_campaigns: { en: "Partner Campaigns", vi: "Chiến dịch Partner", description: "Danh sách chiến dịch affiliate mà Partner được quyền truy cập." },
+  partner_campaign_products: { en: "Campaign Products", vi: "Sản phẩm trong chiến dịch", description: "Các sản phẩm đã đăng ký hoặc được phân phối trong từng chiến dịch." },
+  partner_campaign_performance: { en: "Campaign Performance", vi: "Hiệu suất chiến dịch", description: "Hiệu suất Creator và sản phẩm theo từng chiến dịch Partner." },
 };
 
 const sortFields = {
@@ -766,6 +789,70 @@ export function Reports({ data, accessKey, filters, params }: ViewProps) {
         ) : <EmptyState title="Chưa có metric" detail="Chạy sync để nạp dữ liệu KPI." />}
       </section>
     </div>
+  </>;
+}
+
+function jsonPreview(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "Không thể hiển thị response";
+  }
+}
+
+function ApiDocCard({ doc }: { doc: ApiDoc }) {
+  const copy = apiDocCopy[doc.endpoint_key] ?? {
+    en: endpointLabels[doc.endpoint_key] || doc.endpoint_key,
+    vi: endpointLabels[doc.endpoint_key] || doc.endpoint_key,
+    description: "API đã trả về dữ liệu và được ghi nhận trong kho dữ liệu TikTok.",
+  };
+  return (
+    <article className="api-doc-card">
+      <div className="api-doc-card-header">
+        <div>
+          <div className="api-doc-title-row"><h2>{copy.vi}</h2><span className="status-tag success">Có data</span></div>
+          <p className="api-doc-en">{copy.en}</p>
+        </div>
+        <span className="chip">{fmtNumber(doc.response_count)} responses</span>
+      </div>
+      <div className="api-doc-route"><span className="method">{doc.method}</span><code>{doc.path}</code></div>
+      <p className="api-doc-description">{copy.description}</p>
+      <div className="api-doc-meta">
+        <span><b>Ngày có data:</b> {doc.dates.slice(0, 5).join(", ") || "—"}</span>
+        <span><b>Output:</b> JSON response từ TikTok</span>
+      </div>
+      <div className="api-doc-values">
+        <div className="api-doc-section-title">Field và value đã nhận được</div>
+        {doc.values.length ? (
+          <div className="table-scroll">
+            <table className="data-table api-values-table">
+              <thead><tr><th>Field / Metric path</th><th>Value mẫu</th></tr></thead>
+              <tbody>{doc.values.map((item) => <tr key={item.field}><td className="mono">{item.field}</td><td>{item.samples.join(" · ")}</td></tr>)}</tbody>
+            </table>
+          </div>
+        ) : <p className="muted">Response có data nhưng chưa tách được field scalar.</p>}
+      </div>
+      <details className="api-doc-output">
+        <summary>Xem output JSON mẫu</summary>
+        <pre>{jsonPreview(doc.sample_output)}</pre>
+      </details>
+    </article>
+  );
+}
+
+export function ApiDocs({ data }: ViewProps) {
+  return <>
+    <section className="card api-docs-intro">
+      <CardHeader
+        title="TikTok API Documentation"
+        count={data.apiDocs.length}
+        detail="Chỉ hiển thị các API đã được gọi và thực sự trả về dữ liệu trong api_data."
+      />
+      <div className="api-docs-note"><Icon name="info" size={16} /><span>Đây là tài liệu runtime của workspace: endpoint, output và value được đọc từ response thật, không phải danh sách API lý thuyết.</span></div>
+    </section>
+    {data.apiDocs.length ? (
+      <div className="api-doc-list">{data.apiDocs.map((doc) => <ApiDocCard doc={doc} key={doc.endpoint_key} />)}</div>
+    ) : <section className="card"><EmptyState title="Chưa có API trả data" detail="Chạy sync TikTok thành công để hệ thống ghi nhận API và tạo tài liệu runtime." /></section>}
   </>;
 }
 

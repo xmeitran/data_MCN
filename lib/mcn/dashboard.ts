@@ -134,6 +134,18 @@ export type MetricDefinition = {
 
 export type ProductRecord = { id: number; product_id: string; creator_id: string | null; snapshot_date: string; payload: Record<string, unknown> };
 export type LiveSessionRecord = { id: number; live_room_id: string; snapshot_date: string; payload: Record<string, unknown> };
+export type ApiDoc = {
+  endpoint_key: string;
+  method: string;
+  path: string;
+  response_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  dates: string[];
+  fields: string[];
+  values: Array<{ field: string; samples: string[] }>;
+  sample_output: unknown;
+};
 
 export type DashboardData = {
   creators: Creator[];
@@ -148,6 +160,7 @@ export type DashboardData = {
   metricDefinitions: MetricDefinition[];
   products: ProductRecord[];
   liveSessions: LiveSessionRecord[];
+  apiDocs: ApiDoc[];
   connections: { id: string; status: string; user_type: number | null; last_synced_at: string | null }[];
   syncRuns: { id: number; status: string; started_at: string; finished_at: string | null }[];
   warnings: string[];
@@ -162,6 +175,67 @@ async function safeRows<T>(query: PromiseLike<QueryResult<T>>, label: string, wa
     return [] as T[];
   }
   return result.data ?? [];
+}
+
+function scalarText(value: unknown) {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") return value.length > 100 ? `${value.slice(0, 97)}…` : value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function summarizeApiDocs(rows: Array<{ endpoint_key: string; method: string; path: string; snapshot_date: string; fetched_at: string; response_data: unknown }>): ApiDoc[] {
+  const grouped = new Map<string, ApiDoc & { valueMap: Map<string, Set<string>> }>();
+  const visit = (value: unknown, path: string, fieldSet: Set<string>, valueMap: Map<string, Set<string>>, depth = 0) => {
+    if (depth > 5 || value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      if (value.length) visit(value[0], `${path}[0]`, fieldSet, valueMap, depth + 1);
+      return;
+    }
+    if (typeof value !== "object") {
+      fieldSet.add(path);
+      const samples = valueMap.get(path) ?? new Set<string>();
+      samples.add(scalarText(value));
+      valueMap.set(path, samples);
+      return;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (["avatar", "url", "uri", "image", "images", "main_images", "thumbnail", "cover", "logo"].some((part) => key.toLowerCase().includes(part))) continue;
+      visit(child, path ? `${path}.${key}` : key, fieldSet, valueMap, depth + 1);
+    }
+  };
+
+  for (const row of rows) {
+    const response = row.response_data && typeof row.response_data === "object" ? row.response_data : {};
+    const current = grouped.get(row.endpoint_key) ?? {
+      endpoint_key: row.endpoint_key,
+      method: row.method,
+      path: row.path,
+      response_count: 0,
+      first_seen: row.fetched_at,
+      last_seen: row.fetched_at,
+      dates: [],
+      fields: [],
+      values: [],
+      sample_output: response,
+      valueMap: new Map<string, Set<string>>(),
+    };
+    current.response_count += 1;
+    current.first_seen = !current.first_seen || row.fetched_at < current.first_seen ? row.fetched_at : current.first_seen;
+    current.last_seen = !current.last_seen || row.fetched_at > current.last_seen ? row.fetched_at : current.last_seen;
+    if (!current.dates.includes(row.snapshot_date)) current.dates.push(row.snapshot_date);
+    const fieldSet = new Set(current.fields);
+    visit(response, "data", fieldSet, current.valueMap);
+    current.fields = [...fieldSet].sort();
+    grouped.set(row.endpoint_key, current);
+  }
+
+  return [...grouped.values()].map(({ valueMap, ...doc }) => ({
+    ...doc,
+    dates: doc.dates.sort().reverse(),
+    fields: doc.fields.slice(0, 40),
+    values: [...valueMap.entries()].slice(0, 30).map(([field, samples]) => ({ field, samples: [...samples].slice(0, 3) })),
+  }));
 }
 
 function normalizeMetricRows(rows: MetricDailyRow[]) {
@@ -204,13 +278,14 @@ export async function loadDashboardData(): Promise<DashboardData> {
       metricDefinitions: [],
       products: [],
       liveSessions: [],
+      apiDocs: [],
       connections: [],
       syncRuns: [],
       warnings,
     };
   }
 
-  const [creators, profiles, metricDaily, connections, syncRuns, products, liveSessions] = await Promise.all([
+  const [creators, profiles, metricDaily, connections, syncRuns, products, liveSessions, apiRows] = await Promise.all([
     safeRows<Creator>(
       supabase
         .from("mcn_creators")
@@ -267,6 +342,11 @@ export async function loadDashboardData(): Promise<DashboardData> {
       "LIVE sessions",
       warnings,
     ),
+    safeRows<{ endpoint_key: string; method: string; path: string; snapshot_date: string; fetched_at: string; response_data: unknown }>(
+      supabase.from("api_data").select("endpoint_key, method, path, snapshot_date, fetched_at, response_data").order("fetched_at", { ascending: false }).limit(5000),
+      "API documentation",
+      warnings,
+    ),
   ]);
 
   return {
@@ -284,6 +364,7 @@ export async function loadDashboardData(): Promise<DashboardData> {
     syncRuns,
     products,
     liveSessions,
+    apiDocs: summarizeApiDocs(apiRows),
     warnings,
   };
 }
